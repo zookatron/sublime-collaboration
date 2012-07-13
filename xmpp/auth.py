@@ -142,6 +142,8 @@ class SASL(PlugIn):
         elif "PLAIN" in mecs:
             sasl_data='%s\x00%s\x00%s'%(self.username+'@'+self._owner.Server,self.username,self.password)
             node=Node('auth',attrs={'xmlns':NS_SASL,'mechanism':'PLAIN'},payload=[base64.encodestring(sasl_data)])
+        elif "ANONYMOUS" in mecs:
+            node=Node('auth',attrs={'xmlns':NS_SASL,'mechanism':'ANONYMOUS'})
         else:
             self.startsasl='failure'
             self.DEBUG('I can only use DIGEST-MD5 and PLAIN mecanisms.','error')
@@ -203,8 +205,9 @@ class SASL(PlugIn):
             self._owner.send(node.__str__())
         elif chal.has_key('rspauth'): self._owner.send(Node('response',attrs={'xmlns':NS_SASL}).__str__())
         else: 
-            self.startsasl='failure'
-            self.DEBUG('Failed SASL authentification: unknown challenge','error')
+            self._owner.send(Node('response',attrs={'xmlns':NS_SASL},payload='VGlt').__str__())
+            #self.startsasl='failure'
+            #self.DEBUG('Failed SASL authentification: unknown challenge','error')
         raise NodeProcessed
 
 class Bind(PlugIn):
