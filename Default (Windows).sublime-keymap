@@ -1,0 +1,3 @@
+[
+    { "keys": ["ctrl+alt+c"],  "command": "connect_to_infinote_server" }
+]

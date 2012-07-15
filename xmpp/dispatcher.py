@@ -119,6 +119,7 @@ class Dispatcher(PlugIn):
         if self._owner.Connection.pending_data(timeout):
             try: data=self._owner.Connection.receive()
             except IOError: return
+            if data==' ': return '0'
             self.Stream.Parse(data)
             if len(self._pendingExceptions) > 0:
                 _pendingException = self._pendingExceptions.pop()
@@ -183,11 +184,14 @@ class Dispatcher(PlugIn):
         """ Unregister handler. "typ" and "ns" must be specified exactly the same as with registering."""
         if not xmlns: xmlns=self._owner.defaultNamespace
         if not typ and not ns: typ='default'
-        for pack in self.handlers[xmlns][name][typ+ns]:
-            if handler==pack['func']: break
+        try:
+            for pack in self.handlers[xmlns][name][typ+ns]:
+                if handler==pack['func']: break        
+        except KeyError: pass
         else: pack=None
         try: self.handlers[xmlns][name][typ+ns].remove(pack)
         except ValueError: pass
+        except KeyError: pass
 
     def RegisterDefaultHandler(self,handler):
         """ Specify the handler that will be used if no NodeProcessed exception were raised.
@@ -233,6 +237,7 @@ class Dispatcher(PlugIn):
             Called internally. """
         if not session: session=self
         session.Stream._mini_dom=None
+        if not stanza: return
         name=stanza.getName()
 
         if not direct and self._owner._route:

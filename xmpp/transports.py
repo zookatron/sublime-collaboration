@@ -27,7 +27,7 @@ Transports are stackable so you - f.e. TLS use HTPPROXYsocket or TCPsocket as mo
 Also exception 'error' is defined to allow capture of this module specific exceptions.
 """
 
-import socket,select,base64,dispatcher,sys
+import socket,base64,dispatcher,sys#,select
 from simplexml import ustr
 from client import PlugIn
 from protocol import *
@@ -43,8 +43,9 @@ except ImportError:
         import DNS # http://pydns.sf.net/
         HAVE_PYDNS = True
     except ImportError:
+        pass
         #TODO: use self.DEBUG()
-        sys.stderr.write("Could not load one of the supported DNS libraries (dnspython or pydns). SRV records will not be queried and you may need to set custom hostname/port for some servers to be accessible.\n")
+        #sys.stderr.write("Could not load one of the supported DNS libraries (dnspython or pydns). SRV records will not be queried and you may need to set custom hostname/port for some servers to be accessible.\n")
 
 DATA_RECEIVED='DATA RECEIVED'
 DATA_SENT='DATA SENT'
@@ -126,6 +127,7 @@ class TCPsocket(PlugIn):
             self._sock.connect((server[0], int(server[1])))
             self._send=self._sock.sendall
             self._recv=self._sock.recv
+            self._sock.setblocking(0)
             self.DEBUG("Successfully connected to remote host %s"%`server`,'start')
             return 'ok'
         except socket.error, (errno, strerror): 
@@ -153,11 +155,18 @@ class TCPsocket(PlugIn):
         except: received = ''
 
         while self.pending_data(0):
-            try: add = self._recv(BUFLEN)
-            except: add=''
-            received +=add
+            try:
+                add = self._recv(BUFLEN)
+            except socket.error as e:
+                if e.errno == 10035:
+                    received += ' '
+                    break
+                else:
+                    add=''
+            received += add
             if not add: break
 
+        if received == ' ': return received
         if len(received): # length of 0 means disconnect
             self._seen_data=1
             self.DEBUG(received,'got')
@@ -185,8 +194,9 @@ class TCPsocket(PlugIn):
             self._owner.disconnected()
 
     def pending_data(self,timeout=0):
+
         """ Returns true if there is a data ready to be read. """
-        return select.select([self._sock],[],[],timeout)[0]
+        return True #select.select([self._sock],[],[],timeout)[0]
 
     def disconnect(self):
         """ Closes the socket. """
@@ -279,8 +289,8 @@ class TLS(PlugIn):
         """ Unregisters TLS handler's from owner's dispatcher. Take note that encription
             can not be stopped once started. You can only break the connection and start over."""
         self._owner.UnregisterHandler('features',self.FeaturesHandler,xmlns=NS_STREAMS)
-        self._owner.UnregisterHandlerOnce('proceed',self.StartTLSHandler,xmlns=NS_TLS)
-        self._owner.UnregisterHandlerOnce('failure',self.StartTLSHandler,xmlns=NS_TLS)
+        self._owner.UnregisterHandler('proceed',self.StartTLSHandler,xmlns=NS_TLS)
+        self._owner.UnregisterHandler('failure',self.StartTLSHandler,xmlns=NS_TLS)
 
     def FeaturesHandler(self, conn, feats):
         """ Used to analyse server <features/> tag for TLS support.

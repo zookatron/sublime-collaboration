@@ -100,6 +100,7 @@ class SASL(PlugIn):
         PlugIn.__init__(self)
         self.username=username
         self.password=password
+        self.authtype=''
 
     def plugin(self,owner):
         if not self._owner.Dispatcher.Stream._document_attrs.has_key('version'): self.startsasl='not-supported'
@@ -138,11 +139,14 @@ class SASL(PlugIn):
         self._owner.RegisterHandler('failure',self.SASLHandler,xmlns=NS_SASL)
         self._owner.RegisterHandler('success',self.SASLHandler,xmlns=NS_SASL)
         if "DIGEST-MD5" in mecs:
+            self.authtype = "DIGEST-MD5"
             node=Node('auth',attrs={'xmlns':NS_SASL,'mechanism':'DIGEST-MD5'})
         elif "PLAIN" in mecs:
+            self.authtype = "PLAIN"
             sasl_data='%s\x00%s\x00%s'%(self.username+'@'+self._owner.Server,self.username,self.password)
             node=Node('auth',attrs={'xmlns':NS_SASL,'mechanism':'PLAIN'},payload=[base64.encodestring(sasl_data)])
         elif "ANONYMOUS" in mecs:
+            self.authtype = "ANONYMOUS"
             node=Node('auth',attrs={'xmlns':NS_SASL,'mechanism':'ANONYMOUS'})
         else:
             self.startsasl='failure'
@@ -203,11 +207,13 @@ class SASL(PlugIn):
 ########################################3333
             node=Node('response',attrs={'xmlns':NS_SASL},payload=[base64.encodestring(sasl_data[:-1]).replace('\r','').replace('\n','')])
             self._owner.send(node.__str__())
-        elif chal.has_key('rspauth'): self._owner.send(Node('response',attrs={'xmlns':NS_SASL}).__str__())
+        elif chal.has_key('rspauth'):
+            self._owner.send(Node('response',attrs={'xmlns':NS_SASL}).__str__())
+        elif self.authtype == "ANONYMOUS":
+            self._owner.send(Node('response',attrs={'xmlns':NS_SASL},payload=base64.b64encode(self.username)).__str__())
         else: 
-            self._owner.send(Node('response',attrs={'xmlns':NS_SASL},payload='VGlt').__str__())
-            #self.startsasl='failure'
-            #self.DEBUG('Failed SASL authentification: unknown challenge','error')
+            self.startsasl='failure'
+            self.DEBUG('Failed SASL authentification: unknown challenge','error')
         raise NodeProcessed
 
 class Bind(PlugIn):
