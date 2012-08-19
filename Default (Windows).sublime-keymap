@@ -1,3 +1,6 @@
 [
-    { "keys": ["ctrl+alt+c"],  "command": "connect_to_infinote_server" }
+	{ "keys": ["ctrl+alt+c"], "command": "connect_to_server" },
+	{ "keys": ["ctrl+alt+d"], "command": "disconnect_from_server" },
+	{ "keys": ["ctrl+alt+o"], "command": "open_document" },
+	{ "keys": ["ctrl+alt+s"], "command": "toggle_server" }
 ]
