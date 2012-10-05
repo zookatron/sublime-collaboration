@@ -17,6 +17,7 @@ class SublimeListener(sublime_plugin.EventListener):
         if event not in self._events: return
         for callback in self._events[event]:
             callback(*args)
+        return self
 
     def on_modified(self, view):
         self.emit("modified", view)
@@ -38,9 +39,6 @@ class SublimeListener(sublime_plugin.EventListener):
 
     def on_post_save(self, view):
         self.emit("post_save", view)
-
-    def on_modified(self, view):
-        self.emit("modified", view)
 
     def on_selection_modified(self, view):
         self.emit("selection_modified", view)
@@ -88,8 +86,7 @@ class SublimeEditor(object):
         return self
 
     def focus(self):
-        pass
-        #sublime.set_timeout(lambda: self.window.focus_view(self.view), 0)
+        sublime.set_timeout(lambda: sublime.active_window().focus_view(self.view), 0)
 
     def _on_view_modified(self, view):
         if not self.view: return
@@ -106,6 +103,7 @@ class SublimeEditor(object):
         if not self.view: return
         if view.id() == self.view.id() and self.doc:
             print("closed "+self.doc.name)
+            self.doc.close()
             SublimeListener.removeListener("modified", self._on_view_modified)
             SublimeListener.removeListener("close", self._on_view_close)
             self.doc.removeListener('insert', self._on_doc_insert)
@@ -140,6 +138,7 @@ class SublimeEditor(object):
         return self.view.substr(sublime.Region(0, self.view.size())).replace('\r\n', '\n')
 
     def _replaceText(self, text):
+        if self._getText() == text: return
         edit = self.view.begin_edit()
         self.view.replace(edit, sublime.Region(0, self.view.size()), text)
         self.view.end_edit(edit)
@@ -181,17 +180,34 @@ class SublimeCollaboration(object):
             return editors[name].focus()
         client.open(name, 'text', self.open_callback)
 
+    def add_current(self, name):
+        global client
+        if not client: return
+        if name in editors:
+            return editors[name].focus()
+        view = sublime.active_window().active_view()
+        client.open(name, 'text', lambda error, doc: self.add_callback(view, error, doc), snapshot=view.substr(sublime.Region(0, view.size())))
+
     def open_callback(self, error, doc):
         if error:
             sublime.error_message("Error opening document: {0}".format(error))
         else:
             sublime.set_timeout(lambda: self.create_editor(doc), 0)
 
+    def add_callback(self, view, error, doc):
+        if error:
+            sublime.error_message("Error adding document: {0}".format(error))
+        else:
+            sublime.set_timeout(lambda: self.add_editor(view, doc), 0)
+
     def create_editor(self, doc):
-        global editors
         view = sublime.active_window().new_file()
         view.set_scratch(True)
         view.set_name(doc.name)
+        self.add_editor(view, doc)
+
+    def add_editor(self, view, doc):
+        global editors
         editor = SublimeEditor(view, doc)
         editor.on('close', lambda: editors.pop(doc.name))
         editors[doc.name] = editor
@@ -207,20 +223,35 @@ class SublimeCollaboration(object):
             server.run_forever()
             print("server started")
 
-class ConnectToServerCommand(sublime_plugin.ApplicationCommand, SublimeCollaboration):
+class CollabConnectToServerCommand(sublime_plugin.ApplicationCommand, SublimeCollaboration):
     def run(self):
         sublime.active_window().show_input_panel("Enter server IP:", "localhost", self.connect, None, None)
 
-class DisconnectFromServerCommand(sublime_plugin.ApplicationCommand, SublimeCollaboration):
+class CollabDisconnectFromServerCommand(sublime_plugin.ApplicationCommand, SublimeCollaboration):
     def run(self):
         self.disconnect()
+    def is_enabled(self):
+        global client
+        return client
 
-class ToggleServerCommand(sublime_plugin.ApplicationCommand, SublimeCollaboration):
+class CollabToggleServerCommand(sublime_plugin.ApplicationCommand, SublimeCollaboration):
     def run(self):
         self.toggle_server()
 
-class OpenDocumentCommand(sublime_plugin.ApplicationCommand, SublimeCollaboration):
+class CollabOpenDocumentCommand(sublime_plugin.ApplicationCommand, SublimeCollaboration):
     def run(self):
         global client
         if not client: return
         sublime.active_window().show_input_panel("Enter document name:", "blag", self.open, None, None)
+    def is_enabled(self):
+        global client
+        return client
+
+class CollabAddCurrentDocumentCommand(sublime_plugin.ApplicationCommand, SublimeCollaboration):
+    def run(self):
+        global client
+        if not client: return
+        sublime.active_window().show_input_panel("Enter document name:", "blag", self.add_current, None, None)
+    def is_enabled(self):
+        global client
+        return client

@@ -1,32 +1,19 @@
-import collabdoc, json, doctypes, connection, websocket
+import collabdoc, doctypes, connection, websocket, logging
 
 class CollabClient:
     def __init__(self, host, port):
         self.docs = {}
         self.state = 'connecting'
-        self.lastError = None
 
         self.connected = False
         self.id = None
 
-
-        def _socket_onopen(reason=''):
-            self.setState('disconnected', reason)
-            if reason in ['Closed', 'Stopped by server']:
-                self.setState('stopped', self.lastError or reason)
-
-        def _socket_onopen():
-            self.lastError = self.lastReceivedDoc = self.lastSentDoc = None
-            self.setState('handshaking')
-
         self.socket = websocket.ClientWebSocket(host, port)
-        self.socket.on('message', self._socket_message)
-        self.socket.on('error', lambda e: self.emit('error', e))
-        self.socket.on('connecting', lambda: self.setState('connecting'))
-        self.socket.on('open', _socket_onopen)
-        self.socket.on('close', _socket_onopen)
+        self.socket.on('message', self.socket_message)
+        self.socket.on('error', self.socket_error)
+        self.socket.on('open', self.socket_open)
+        self.socket.on('close', self.socket_close)
         self.socket.start()
-
 
         self._events = {}
 
@@ -46,96 +33,68 @@ class CollabClient:
             callback(*args)
         return self
 
-    def _socket_message(self, msg):
+    def socket_open(self):
+        self.set_state('handshaking')
+
+    def socket_close(self, reason=''):
+        self.set_state('closed', reason)
+        self.socket = None
+
+    def socket_error(self, error):
+        self.emit('error', error)
+
+    def socket_message(self, msg):
         if 'auth' in msg:
-            if msg['auth'] == '':
-                self.lastError = msg['error']
+            if msg['auth'] is None or msg['auth'] == '':
+                logging.warning('Authentication failed: {0}'.format(msg['error']))
                 self.disconnect()
-                return self.emit('connect failed', msg.error)
             else:
                 self.id = msg['auth']
-                self.setState('ok')
-                return
+                self.set_state('ok')
+            return
 
-        if 'doc' in msg:
-            docName = msg['doc']
-            self.lastReceivedDoc = docName
+        if 'doc' in msg and msg['doc'] in self.docs:
+            self.docs[msg['doc']].on_message(msg)
         else:
-            msg['doc'] = docName = self.lastReceivedDoc
+            logging.error('Unhandled message {0}'.format(msg))
 
-        if docName in self.docs:
-            self.docs[docName]._onMessage(msg)
-        else:
-            print('Unhandled message {1}'.format(msg))
-
-    def setState(self, state, data=None):
-        if self.state is state:
-          return
+    def set_state(self, state, data=None):
+        if self.state is state: return
         self.state = state
 
-        if state is 'disconnected':
+        if state is 'closed':
             self.id = None
         self.emit(state, data)
 
-        for docName in self.docs:
-            self.docs[docName]._connectionStateChanged(state, data)
-
     def send(self, data):
-        docName = data['doc']
-
-        if docName is self.lastSentDoc:
-            del data['doc']
-        else:
-            self.lastSentDoc = docName
-
-        self.socket.send(json.dumps(data))
+        if self.state is not "closed":
+            self.socket.send(data)
 
     def disconnect(self):
-        self.socket.close()
- 
-    def makeDoc(self, name, data, callback):
-        if name in self.docs:
-            raise Exception("Doc {1} already open".format(name))
+        if self.state is not "closed":
+            self.socket.close()
 
-        doc = collabdoc.CollabDoc(self, name, data)
-        self.docs[name] = doc
-
-        def _doc_open(error):
-            if error:
-                del self.docs[name]
-            callback(error, doc if not error else None)
-        doc.open(_doc_open)
-
-    def openExisting(self, docName, callback):
-        if self.state is 'stopped':
-            return callback('connection closed')
-        if docName in self.docs:
-            return callback(None, self.docs[docName])
-        self.makeDoc(docName, {}, callback)
-
-    def open(self, docName, type, callback):
-        if self.state is 'stopped':
+    def open(self, name, doctype, callback, **kwargs):
+        if self.state is 'closed':
             return callback('connection closed', None)
 
         if self.state is 'connecting':
-            self.on('handshaking', lambda x: self.open(docName, type, callback))
-            return
+            return self.on('ok', lambda x: self.open(name, doctype, callback))
 
-        if isinstance(type, (str, unicode)):
-            type = doctypes.types.get(type, None)
+        if name in self.docs:
+            return callback("doc {0} already open".format(name), None)
 
-        if not type:
-            return callback("OT code for document type missing", None)
+        if isinstance(doctype, (str, unicode)):
+            doctype = doctypes.types.get(doctype, None)
 
-        if not docName:
-            raise Exception('Server-generated random doc names are not currently supported')
+        if not doctype:
+            return callback("Invalid document type", None)
 
-        if docName in self.docs:
-            doc = self.docs[docName]
-            if doc.type.name == type.name:
-                callback(None, doc)
-            else:
-                callback('Type mismatch', doc)
-            return
+        doc = collabdoc.CollabDoc(self, name, doctype, kwargs.get('snapshot', None))
+        self.docs[name] = doc
 
-        self.makeDoc(docName, {'create':True, 'type':type.name}, callback)
+        doc.open(lambda error, doc: callback(error, doc if not error else None))
+
+    def closed(self, name):
+        del self.docs[name]
+

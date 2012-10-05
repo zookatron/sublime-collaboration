@@ -1,0 +1,22 @@
+[
+    {
+        "caption": "Collaboration: Connect To Server",
+        "command": "collab_connect_to_server"
+    },
+    {
+        "caption": "Collaboration: Disconnect From Server",
+        "command": "collab_disconnect_from_server"
+    },
+    {
+        "caption": "Collaboration: Toggle Local Server",
+        "command": "collab_toggle_server"
+    },
+    {
+        "caption": "Collaboration: Open Document",
+        "command": "collab_open_document"
+    },
+    {
+        "caption": "Collaboration: Add Current Document",
+        "command": "collab_add_current_document"
+    }
+]

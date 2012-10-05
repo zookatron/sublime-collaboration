@@ -787,7 +787,7 @@ class ClientWebSocket(threading.Thread):
 
     def send(self, data):
         #print('Sending:{0}'.format(data))
-        self.sock.send(data)
+        self.sock.send(json.dumps(data))
 
     def close(self):
         self.keep_running = False
@@ -849,6 +849,7 @@ class ServerWebSocket(threading.Thread):
         self.ws.setup(self.sock)
 
         self._ready = True
+        self.emit('ok')
 
         while self._ready:
             data = self.ws.recv()
@@ -865,11 +866,11 @@ class ServerWebSocket(threading.Thread):
         try:
             resp_headers = self._read_headers()
         except Exception as e:
-            print("Invalid WebSocket Header")
+            logging.error("Invalid WebSocket Header")
             return False
 
         if not self._validate_header(resp_headers):
-            print("Invalid WebSocket Header")
+            logging.error("Invalid WebSocket Header")
             return False
 
         key = base64.encodestring(hashlib.sha1(resp_headers['sec-websocket-key'] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest()).strip()
@@ -930,9 +931,8 @@ class ServerWebSocket(threading.Thread):
     def send(self, msg):
         if not self._ready:
             return
-        msg = json.dumps(msg)
         #print('Sending to {0}:{1}'.format(self.address, msg))
-        self.ws.send(msg)
+        self.ws.send(json.dumps(msg))
 
     def ready(self):
         return self._ready

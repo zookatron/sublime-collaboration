@@ -1,6 +1,7 @@
 [
-	{ "keys": ["ctrl+alt+c"], "command": "connect_to_server" },
-	{ "keys": ["ctrl+alt+d"], "command": "disconnect_from_server" },
-	{ "keys": ["ctrl+alt+o"], "command": "open_document" },
-	{ "keys": ["ctrl+alt+s"], "command": "toggle_server" }
+	{ "keys": ["ctrl+alt+c"], "command": "collab_connect_to_server" },
+	{ "keys": ["ctrl+alt+d"], "command": "collab_disconnect_from_server" },
+	{ "keys": ["ctrl+alt+o"], "command": "collab_open_document" },
+	{ "keys": ["ctrl+alt+s"], "command": "collab_toggle_server" },
+	{ "keys": ["ctrl+alt+a"], "command": "collab_add_current_document" }
 ]

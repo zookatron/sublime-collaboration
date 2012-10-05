@@ -1,502 +1,156 @@
-import doctypes, syncQueue, time, re
-
-class EventEmitter(object):
-    def __init__(self):
-        self._events = {}
-
-    def on(self, event, fct):
-        if event not in self._events: self._events[event] = []
-        self._events[event].append(fct)
-        return self
-
-    def removeListener(self, event, fct):
-        if event not in self._events: return self
-        self._events[event].remove(fct)
-        return self
-
-    def emit(self, event, *args):
-        if event not in self._events: return self
-        for callback in self._events[event]:
-            callback(*args)
-        return self
-
-    def listeners(self, event):
-        return self._events.get(event, [])
+import doctypes, syncQueue, time, re, logging
 
 class CollabModel(object):
-    def __init__(self, db, options=None):
-        self.options = options
-        self.db = db
-
-        if not self.options:
-            options = {}
+    def __init__(self, options=None):
+        self.options = options if options else {}
+        self.options.setdefault('numCachedOps', 20)
+        self.options.setdefault('opsBeforeCommit', 20)
+        self.options.setdefault('maximumAge', 20)
 
         self.docs = {}
-        self._events = {}
 
-        self.awaitingGetSnapshot = {}
+    def make_op_queue(self, docname, doc):
 
-        if 'numCachedOps' not in self.options:
-            self.options['numCachedOps'] = 20
-
-        if 'opsBeforeCommit' not in self.options:
-            self.options['opsBeforeCommit'] = 20
-
-        if 'maximumAge' not in self.options:
-            self.options['maximumAge'] = 20
-
-    def on(self, event, fct):
-        if event not in self._events: self._events[event] = []
-        self._events[event].append(fct)
-        return self
-
-    def removeListener(self, event, fct):
-        if event not in self._events: return self
-        self._events[event].remove(fct)
-        return self
-
-    def emit(self, event, *args):
-        if event not in self._events: return self
-        for callback in self._events[event]:
-            callback(*args)
-        return self
-
-    def makeOpQueue(self, docName, doc):
-
-        def _queue_process(opData, callback):
+        def queue_process(opData, callback):
             if 'v' not in opData or opData['v'] < 0:
-                return callback('Version missing')
+                return callback('Version missing', None)
             if opData['v'] > doc['v']:
-                return callback('Op at future version')
+                return callback('Op at future version', None)
             if opData['v'] < doc['v'] - self.options['maximumAge']:
-                return callback('Op too old')
+                return callback('Op too old', None)
+            if opData['v'] < 0:
+                return callback('Invalid version', None)
 
-            if 'meta' not in opData or not opData['meta']:
-                opData['meta'] = {}
-            opData['meta']['ts'] = time.time()
+            ops = doc['ops'][(len(doc['ops'])+opData['v']-doc['v']):]
 
-            def _get_ops(error, ops=None):
+            if doc['v'] - opData['v'] != len(ops):
+                logging.error("Could not get old ops in model for document {1}. Expected ops {1} to {2} and got {3} ops".format(docname, opData['v'], doc['v'], len(ops)))
+                return callback('Internal error', None)
+
+            for oldOp in ops:
+                opData['op'] = doc['type'].transform(opData['op'], oldOp['op'], 'left')
+                opData['v']+=1
+
+            newSnapshot = doc['type'].apply(doc['snapshot'], opData['op'])
+
+            if opData['v'] != doc['v']:
+                logging.error("Version mismatch detected in model. File a ticket - this is a bug. Expecting {0} == {1}".format(opData['v'], doc['v']))
+                return callback('Internal error', None)
+
+            oldSnapshot = doc['snapshot']
+            doc['v'] = opData['v'] + 1
+            doc['snapshot'] = newSnapshot
+            for listener in doc['listeners']:
+                listener(opData, newSnapshot, oldSnapshot)
+
+            def save_op_callback(error=None):
                 if error:
-                    return callback(error)
-
-                if doc['v'] - opData['v'] != len(ops):
-                    print("Could not get old ops in model for document {0}".format(docName))
-                    print("Expected ops {0} to {1} and got {2} ops".format(opData['v'], doc['v'], len(ops)))
-                    return callback('Internal error')
-
-                if len(ops) > 0:
-                    try:
-                        for oldOp in ops:
-                            if 'meta' in oldOp and 'source' in oldOp['meta'] and 'dupIfSource' in opData and oldOp['meta']['source'] in opData['dupIfSource']:
-                                return callback('Op already submitted')
-
-                            opData['op'] = doc['type'].transform(opData['op'], oldOp['op'], 'left')
-                            opData['v']+=1
-                    except Exception as error:
-                        print(error)
-                        return callback(str(error))
-
-                try:
-                    snapshot = doc['type'].apply(doc['snapshot'], opData['op'])
-                except Exception as error:
-                    print(error)
-                    return callback(error)
-
-                if opData['v'] != doc['v']:
-                    print("Version mismatch detected in model. File a ticket - this is a bug.")
-                    print("Expecting {0} == {1}".format(opData['v'], doc['v']))
-                    return callback('Internal error')
-
-                writeOp = self.db.writeOp if self.db and 'writeOp' in self.db else lambda docName, newOpData, callback: callback()
-
-                def _writeop_callback(error=None):
-                    if error:
-                        print("Error writing ops to database: {0}".format(error))
-                        return callback(error)
-
-                    if 'stats' in self.options and 'writeOp' in self.options['stats']:
-                        self.options['stats']['writeOp']()
-
-                    oldSnapshot = doc['snapshot']
-
-                    doc['v'] = opData['v'] + 1
-                    doc['snapshot'] = snapshot
-
-                    doc['ops'].append(opData)
-                    if self.db and len(doc['ops']) > self.options['numCachedOps']:
-                        doc['ops'].pop(0)
-
-                    self.emit('applyOp', docName, opData, snapshot, oldSnapshot)
-                    doc['eventEmitter'].emit('op', opData, snapshot, oldSnapshot)
-
+                    logging.error("Error saving op: {0}".format(error))
+                    return callback(error, None)
+                else:
                     callback(None, opData['v'])
-            
-                    # I need a decent strategy here for deciding whether or not to save the snapshot.
-                    #
-                    # The 'right' strategy looks something like "Store the snapshot whenever the snapshot
-                    # is smaller than the accumulated op data". For now, I'll just store it every 20
-                    # ops or something. (Configurable with doc.committedVersion)
-                    if not doc['snapshotWriteLock'] and doc['committedVersion'] + self.options['opsBeforeCommit'] <= doc['v']:
-                        def write_snappy_error(error=None):
-                            if error:
-                                print("Error writing snapshot {0}. This is nonfatal".format(error))
-                        self.tryWriteSnapshot(docName, write_snappy_error)
-                writeOp(docName, opData, _writeop_callback)
+            self.save_op(docname, opData, save_op_callback)
 
-            self.getOps(docName, opData['v'], doc['v'], _get_ops)
+        return syncQueue.syncQueue(queue_process)
 
-        return syncQueue.syncQueue(_queue_process)
+    def save_op(self, docname, op, callback):
+        doc = self.docs[docname]
+        doc['ops'].append(op)
+        if len(doc['ops']) > self.options['numCachedOps']:
+            doc['ops'].pop(0)
+        if not doc['savelock'] and doc['savedversion'] + self.options['opsBeforeCommit'] <= doc['v']:
+            pass
+        callback(None)
 
-    def add(self, docName, error, data, committedVersion, ops, dbMeta):
-        callbacks = None
-        if docName in self.awaitingGetSnapshot:
-            callbacks = self.awaitingGetSnapshot[docName]
-            del self.awaitingGetSnapshot[docName]
+    def exists(self, docname):
+        return docname in self.docs
 
-        if not error and docName in self.docs:
-            error = "doc already exists"
-
-        if error:
-            if callbacks:
-                for callback in callbacks:
-                    callback(error)
-        else:
-            doc = {
-                'snapshot': data['snapshot'],
-                'v': data['v'],
-                'type': data['type'],
-                'meta': data['meta'],
-                'ops': ops if ops else [],
-                'eventEmitter': EventEmitter(),
-                'committedVersion': committedVersion if committedVersion else data['v'],
-                'snapshotWriteLock': False,
-                'dbMeta': dbMeta
-            }
-
-            self.docs[docName] = doc
-
-            doc['opQueue'] = self.makeOpQueue(docName, doc)
-            
-            self.emit('add', docName, data)
-            if callbacks:
-                for callback in callbacks:
-                    callback(None, doc)
-
-        return doc
-
-
-
-    def getOpsInternal(self, docName, start, end, callback):
-        if not self.db:
-            return callback('Document does not exist')
-
-        def _getops(error, ops):
-            if error:
-                if callback:
-                    return callback(error)
-                return
-
-            v = start
-            for op in ops:
-                v+=1
-            op['v'] = v
-
-            if callback:
-                callback(None, ops)
-
-        self.db.getOps(docName, start, end, _getops)
-
-
-
-    def load(self, docName, callback):
-        if docName in self.docs:
-            if 'stats' in self.options and 'cacheHit' in self.options['stats']:
-                self.options['stats']['cacheHit']('getSnapshot')
-            return callback(None, self.docs[docName])
-
-        if not self.db:
-            return callback('Document does not exist')
-
-        callbacks = self.awaitingGetSnapshot[docName]
-
-        if callbacks:
-            return callbacks.append(callback)
-
-        if 'stats' in self.options and 'cacheMiss' in self.options['stats']:
-            self.options['stats']['cacheMiss']('getSnapshot')
-
-        self.awaitingGetSnapshot[docName] = callbacks
-
-        def _get_snappy(error, data, dbMeta):
-            if error:
-                return self.add(docName, error)
-
-            type = doctypes.types[data['type']]
-            if not type:
-                print("Type '{0}' missing".format(data.type))
-                return callback("Type not found")
-            data['type'] = type
-
-            committedVersion = data['v']
-
-            def _get_ops_internal(error, ops):
-                if error:
-                    return callback(error)
-
-                if len(ops) > 0:
-                    print("Catchup {0} {1} -> {2}".format(docName, data['v'], data['v'] + len(ops))) # not an error?
-
-                    try:
-                        for op in ops:
-                            data['snapshot'] = type.apply(data['snapshot'], op['op'])
-                            data['v']+=1
-                    except Exception as e:
-                        print("Op data invalid for {0}: {1}".format(docName, e))
-                        return callback('Op data invalid')
-
-                self.emit('load', docName, data)
-                self.add(docName, error, data, committedVersion, ops, dbMeta)
-            self.getOpsInternal(docName, data['v'], None, _get_ops_internal)
-        self.db.getSnapshot(docName, _get_snappy)
-
-
-
-    def tryWriteSnapshot(self, docName, callback):
-        if not self.db or not docName in self.docs:
-            return callback() if callback else None
-
-        doc = self.docs[docName]
-
-        if not doc:
-            return callback() if callback else None
-
-        if doc['committedVersion'] is doc['v']:
-            return callback() if callback else None
-
-        if doc['snapshotWriteLock']:
-            return callback('Another snapshot write is in progress') if callback else None
-
-        doc['snapshotWriteLock'] = True
-
-        if 'stats' in self.options and 'writeSnapshot' in self.options['stats']:
-            self.options['stats']['writeSnapshot']()
-
-        writeSnapshot = self.db.writeSnapshot if self.db else lambda docName, docData, dbMeta, callback: callback()
-
-        data = {
-            'v': doc['v'],
-            'meta': doc['meta'],
-            'snapshot': doc['snapshot'],
-            'type': doc['type'].name
+    def add(self, docname, data):
+        doc = {
+            'snapshot': data['snapshot'],
+            'v': data['v'],
+            'type': data['type'],
+            'ops': data['ops'],
+            'listeners': [],
+            'savelock': False,
+            'savedversion': 0,
         }
+        
+        doc['opQueue'] = self.make_op_queue(docname, doc)
 
-        def _write_snappy(error, dbMeta):
-            doc['snapshotWriteLock'] = False
-            doc['committedVersion'] = data['v']
-            doc['dbMeta'] = dbMeta
-            return callback(error) if callback else None
+        self.docs[docname] = doc
 
-        self.writeSnapshot(docName, data, doc['dbMeta'], _write_snappy)
+    def load(self, docname, callback):
+        # try:
+        return callback(None, self.docs[docname])
+        # except KeyError:
+        #     return callback('Document does not exist', None)
 
+        # self.loadingdocs = {}
+        # self.loadingdocs.setdefault(docname, []).append(callback)
+        # if docname in self.loadingdocs:
+        #     for callback in self.loadingdocs[docname]:
+        #         callback(None, doc)
+        #     del self.loadingdocs[docname]
 
-
-    def create(self, docName, type, meta, callback=None):
-        if callable(meta):
-            callback = meta
-            meta = {}
-
-        if not re.match("^[A-Za-z0-9._-]*$", docName):
+    def create(self, docname, doctype, snapshot=None, callback=None):
+        if not re.match("^[A-Za-z0-9._-]*$", docname):
             return callback('Invalid document name') if callback else None
-        if docName in self.docs:
+        if self.exists(docname):
             return callback('Document already exists') if callback else None
 
-        if isinstance(type, (str, unicode)):
-            type = doctypes.types.get(type, None)
+        if isinstance(doctype, (str, unicode)):
+            doctype = doctypes.types.get(doctype, None)
+        if not doctype:
+            return callback('Invalid document type') if callback else None
 
-        if not type:
-            return callback('Type not found') if callback else None
-
+        doctype = doctype()
         data = {
-            'snapshot': type().create(),
-            'type': type.name,
-            'meta': meta if meta else {},
-            'v': 0
+            'snapshot': snapshot if snapshot else doctype.create(),
+            'type': doctype,
+            'v': 0,
+            'ops': []
         }
+        self.add(docname, data)
 
-        def done(error=None, dbMeta=None):
-            if error:
-                return callback(error) if callback else None
+        return callback(None) if callback else None
 
-            data['type'] = type()
-            self.add(docName, None, data, 0, [], dbMeta)
-            self.emit('create', docName, data)
-            return callback() if callback else None
+    def delete(self, docname, callback=None):
+        if docname not in self.docs: raise Exception('delete called but document does not exist')
+        del self.docs[docname]
+        return callback(None) if callback else None
 
-        if self.db:
-            self.db.create(docName, data, done)
-        else:
-            done()
+    def listen(self, docname, listener, callback=None):
+        def done(error, doc):
+            if error: return callback(error, None) if callback else None
+            doc['listeners'].append(listener)
+            return callback(None, doc['v']) if callback else None
+        self.load(docname, done)
 
+    def remove_listener(self, docname, listener):
+        if docname not in self.docs: raise Exception('remove_listener called but document not loaded')
+        self.docs[docname]['listeners'].remove(listener)
 
+    def get_version(self, docname, callback):
+        self.load(docname, lambda error, doc: callback(error, None if error else doc['v']))
 
-    def delete(self, docName, callback):
-        doc = None
-        if docName in self.docs:
-            doc = self.docs[docName]
-            del self.docs[docName]
+    def get_doctype(self, docname, callback):
+        self.load(docname, lambda error, doc: callback(error, None if error else doc['type']))
 
-        def done(error=None):
-            if not error:
-                model.emit('delete', docName)
-            return callback(error) if callback else None
+    def get_snapshot(self, docname, callback):
+        self.load(docname, lambda error, doc: callback(error, None if error else doc['snapshot']))
 
-        if self.db:
-            return self.db.delete(docName, doc['dbMeta'] if doc else None, done)
-        else:
-            return done() if doc else done('Document does not exist')
-
-
-
-    def getOps(self, docName, start, end, callback):
-        if not start >= 0:
-            raise Exception('start must be 0+')
-
-        if callable(end):
-            end, callback = None, end
-
-        ops = None
-        if docName in self.docs:
-            ops = self.docs[docName]['ops']
-
-            version = self.docs[docName]['v']
-
-            if not end:
-                end = version
-            start = min(start, end)
-
-            if start == end:
-                return callback(None, [])
-
-            base = version - len(ops)
-
-            if not self.db or start >= base:
-                if 'stats' in self.options and 'cacheHit' in self.options['stats']:
-                    self.options['stats']['cacheHit']('getOps')
-
-                return callback(None, ops[(start - base):(end - base)])
-
-        if 'stats' in self.options and 'cacheMiss' in self.options['stats']:
-            self.options['stats']['cacheMiss']('getOps')
-
-        return self.getOpsInternal(docName, start, end, callback)
-
-
-
-    def getSnapshot(self, docName, callback):
-        self.load(docName, lambda error, doc=None: callback(error, {'v':doc['v'], 'type':doc['type'], 'snapshot':doc['snapshot'], 'meta':doc['meta']} if doc else None))
-
-
-
-    def getVersion(self, docName, callback):
-        self.load(docName, lambda error, doc=None: callback(error, doc['v'] if doc else None))
-
-
+    def get_data(self, docname, callback):
+        self.load(docname, lambda error, doc: callback(error, None if error else doc))
 
     # Ops are queued before being applied so that the following code applies op C before op B:
     # model.applyOp 'doc', OPA, -> model.applyOp 'doc', OPB
     # model.applyOp 'doc', OPC
-    def applyOp(self, docName, opData, callback=None):
-        def _load(error, doc):
-            if error: return callback(error) if callback else None
-            doc['opQueue'](opData, lambda error, newVersion=None: callback(error, newVersion) if callback else None)
-        self.load(docName, _load)
+    def applyOp(self, docname, op, callback):
+        self.load(docname, lambda error, doc: callback(error, None) if error else doc['opQueue'](op, callback))
+        
+    def flush(self, callback=None):
+        return callback() if callback else None
 
-
-
-    def applyMetaOp(self, docName, metaOpData, callback):
-        path = metaOpData['meta']['path']
-        value = metaOpData['meta']['value']
-
-        def _load(error, doc):
-            if error:
-                return callback(error) if callback else None
-            else:
-                applied = False
-                if path[0] == 'shout':
-                    doc['eventEmitter'].emit('op', metaOpData)
-                    applied = True
-
-                if applied:
-                    model.emit('applyMetaOp', docName, path, value)
-                return callback(None, doc['v']) if callback else None
-        self.load(docName, _load)
-
-
-
-    def listen(self, docName, version=None, listener=None, callback=None):
-        if callable(version):
-            version, listener, callback = None, version, listener
-
-        def _load(error, doc):
-            if error:
-                return callback(error) if callback else None
-
-            if version:
-                def _getops(error, data):
-                    if error:
-                        return callback(error) if callback else None
-
-                    doc['eventEmitter'].on('op', listener)
-                    if callback:
-                        callback(None, version)
-
-                    for op in data:
-                        listener(op)
-                        if not listener in doc['eventEmitter'].listeners('op'):
-                            break
-
-                self.getOps(docName, version, None, _getops)
-
-            else:
-                doc['eventEmitter'].on('op', listener)
-                return callback(None, doc['v']) if callback else None
-        self.load(docName, _load)
-
-
-
-    def removeListener(self, docName, listener):
-        if docName not in self.docs:
-            raise Exception('removeListener called but document not loaded')
-        self.docs[docName]['eventEmitter'].removeListener('op', listener)
-
-
-
-    def flush(self, callback):
-        if not self.db:
-            return callback() if callback else None
-
-        global pendingWrites
-        pendingWrites = 0
-
-        for docName in self.docs:
-            doc = self.docs[docName]
-            if doc['committedVersion'] < doc['v']:
-                pendingWrites+=1
-
-                def _write_it_snappy_like():
-                    global pendingWrites
-                    pendingWrites-=1
-                    if pendingWrites == 0 and callback:
-                        callback()
-                    callback = None
-                self.tryWriteSnapshot(docName, _write_it_snappy_like)
-
-        if pendingWrites == 0 and callback:
-            callback()
-
-
-
-    def closeDb(self):
-        if self.db:
-            self.db.close()
-        self.db = None
+    def close(self):
+        self.flush()
