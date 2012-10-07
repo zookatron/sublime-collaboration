@@ -1,4 +1,4 @@
-import session, agent, model, threading, connection, websocket
+import session, model, threading, connection, websocket
 
 # connection should implement the following interface:
 #     headers
