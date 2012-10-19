@@ -1,14 +1,4 @@
-import session, model, threading, connection, websocket
-
-# connection should implement the following interface:
-#     headers
-#     address
-#     abort()
-#     stop()
-#     ready()
-#     send(msg)
-#     removeListener()
-#     on(event, handler) - where event can be 'message' or 'close'
+import threading, session, model, connection
 
 class CollabServer(object):
 	def __init__(self, options=None):
@@ -19,12 +9,17 @@ class CollabServer(object):
 		self.model = model.CollabModel(options)
 		self.host = self.options.get('host', '127.0.0.1')
 		self.port = self.options.get('port', 6633)
+		self.idtrack = 0
 
-		self.server = websocket.WebSocketServer(self.host, self.port)
-		self.server.on('connection', lambda connection: session.CollabUserSession(connection, self.model))
+		self.server = connection.SocketServer(self.host, self.port)
+		self.server.on('connection', lambda connection: session.CollabSession(connection, self.model, self.new_id()))
 
 	def run_forever(self):
 		threading.Thread(target=self.server.run_forever).start()
+
+	def new_id(self):
+		self.idtrack += 1
+		return self.idtrack
 
 	def close(self):
 		self.model.close()

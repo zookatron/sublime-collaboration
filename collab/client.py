@@ -1,14 +1,16 @@
-import collabdoc, doctypes, connection, websocket, logging
+import logging, doc, connection
 
 class CollabClient:
     def __init__(self, host, port):
         self.docs = {}
         self.state = 'connecting'
 
+        self.waiting_for_docs = []
+
         self.connected = False
         self.id = None
 
-        self.socket = websocket.ClientWebSocket(host, port)
+        self.socket = connection.ClientSocket(host, port)
         self.socket.on('message', self.socket_message)
         self.socket.on('error', self.socket_error)
         self.socket.on('open', self.socket_open)
@@ -53,6 +55,16 @@ class CollabClient:
                 self.set_state('ok')
             return
 
+        if 'docs' in msg:
+            if 'error' in msg:
+                for callback in self.waiting_for_docs:
+                    callback(msg['error'], None)
+            else:
+                for callback in self.waiting_for_docs:
+                    callback(None, msg['docs'])
+            self.waiting_for_docs = []
+            return
+
         if 'doc' in msg and msg['doc'] in self.docs:
             self.docs[msg['doc']].on_message(msg)
         else:
@@ -74,26 +86,31 @@ class CollabClient:
         if self.state is not "closed":
             self.socket.close()
 
-    def open(self, name, doctype, callback, **kwargs):
+    def get_docs(self, callback):
         if self.state is 'closed':
             return callback('connection closed', None)
 
         if self.state is 'connecting':
-            return self.on('ok', lambda x: self.open(name, doctype, callback))
+            return self.on('ok', lambda x: self.get_docs(callback))
+
+        if not self.waiting_for_docs:
+            self.send({"docs":None})
+        self.waiting_for_docs.append(callback)
+
+    def open(self, name, callback, **kwargs):
+        if self.state is 'closed':
+            return callback('connection closed', None)
+
+        if self.state is 'connecting':
+            return self.on('ok', lambda x: self.open(name, callback))
 
         if name in self.docs:
             return callback("doc {0} already open".format(name), None)
 
-        if isinstance(doctype, (str, unicode)):
-            doctype = doctypes.types.get(doctype, None)
+        newdoc = doc.CollabDoc(self, name, kwargs.get('snapshot', None))
+        self.docs[name] = newdoc
 
-        if not doctype:
-            return callback("Invalid document type", None)
-
-        doc = collabdoc.CollabDoc(self, name, doctype, kwargs.get('snapshot', None))
-        self.docs[name] = doc
-
-        doc.open(lambda error, doc: callback(error, doc if not error else None))
+        newdoc.open(lambda error, doc: callback(error, doc if not error else None))
 
     def closed(self, name):
         del self.docs[name]

@@ -57,6 +57,7 @@ class SublimeEditor(object):
         self.view = view
         self.doc = doc
         self._events = {}
+        self.state = "ok"
 
         SublimeListener.on("modified", self._on_view_modified)
         SublimeListener.on("close", self._on_view_close)
@@ -64,6 +65,7 @@ class SublimeEditor(object):
 
         self.prevvalue = self.doc.getText()
         sublime.set_timeout(lambda: self._replaceText(self.prevvalue), 0)
+        self.doc.on('closed', self.close)
         self.doc.on('insert', self._on_doc_insert)
         self.doc.on('delete', self._on_doc_delete)
 
@@ -88,6 +90,19 @@ class SublimeEditor(object):
     def focus(self):
         sublime.set_timeout(lambda: sublime.active_window().focus_view(self.view), 0)
 
+    def close(self, reason=None):
+        if self.state != "closed":
+            self.state = "closed"
+            print("closed "+self.doc.name+(": "+reason if reason else ''))
+            self.doc.close()
+            SublimeListener.removeListener("modified", self._on_view_modified)
+            SublimeListener.removeListener("close", self._on_view_close)
+            self.doc.removeListener('insert', self._on_doc_insert)
+            self.doc.removeListener('delete', self._on_doc_delete)
+            self.view = None
+            self.doc = None
+            self.emit("closed")
+
     def _on_view_modified(self, view):
         if not self.view: return
         if view.id() == self.view.id() and self.doc:
@@ -102,15 +117,7 @@ class SublimeEditor(object):
     def _on_view_close(self, view):
         if not self.view: return
         if view.id() == self.view.id() and self.doc:
-            print("closed "+self.doc.name)
-            self.doc.close()
-            SublimeListener.removeListener("modified", self._on_view_modified)
-            SublimeListener.removeListener("close", self._on_view_close)
-            self.doc.removeListener('insert', self._on_doc_insert)
-            self.doc.removeListener('delete', self._on_doc_delete)
-            self.view = None
-            self.doc = None
-            self.emit("close")
+            self.close()
 
     def _applyChange(self, doc, oldval, newval):
         if oldval == newval:
@@ -164,21 +171,38 @@ class SublimeCollaboration(object):
         global client
         if client: self.disconnect()
         client = collab.client.CollabClient(host, 6633)
+        client.on('error', lambda error: sublime.error_message("Client error: {0}".format(error)))
+        client.on('closed', self.on_close)
         print("connected")
 
     def disconnect(self):
         global client
         if not client: return
         client.disconnect()
+
+    def on_close(self, reason=None):
+        global client
+        if not client: return
         client = None
         print("disconnected")
+
+    def open_get_docs(self, error, items):
+        global client
+        if not client: return
+        if error:
+            sublime.error_message("Error retrieving document names: {0}".format(error))
+        else:
+            if items:
+                sublime.set_timeout(lambda: sublime.active_window().show_quick_panel(items, lambda x: None if x < 0 else self.open(items[x])), 0)
+            else:
+                sublime.error_message("No documents availible to open")
 
     def open(self, name):
         global client
         if not client: return
         if name in editors:
             return editors[name].focus()
-        client.open(name, 'text', self.open_callback)
+        client.open(name, self.open_callback)
 
     def add_current(self, name):
         global client
@@ -186,7 +210,8 @@ class SublimeCollaboration(object):
         if name in editors:
             return editors[name].focus()
         view = sublime.active_window().active_view()
-        client.open(name, 'text', lambda error, doc: self.add_callback(view, error, doc), snapshot=view.substr(sublime.Region(0, view.size())))
+        if view:
+            client.open(name, lambda error, doc: self.add_callback(view, error, doc), snapshot=view.substr(sublime.Region(0, view.size())))
 
     def open_callback(self, error, doc):
         if error:
@@ -209,7 +234,7 @@ class SublimeCollaboration(object):
     def add_editor(self, view, doc):
         global editors
         editor = SublimeEditor(view, doc)
-        editor.on('close', lambda: editors.pop(doc.name))
+        editor.on('closed', lambda: editors.pop(doc.name))
         editors[doc.name] = editor
 
     def toggle_server(self):
@@ -242,7 +267,7 @@ class CollabOpenDocumentCommand(sublime_plugin.ApplicationCommand, SublimeCollab
     def run(self):
         global client
         if not client: return
-        sublime.active_window().show_input_panel("Enter document name:", "blag", self.open, None, None)
+        client.get_docs(self.open_get_docs)
     def is_enabled(self):
         global client
         return client
@@ -251,7 +276,8 @@ class CollabAddCurrentDocumentCommand(sublime_plugin.ApplicationCommand, Sublime
     def run(self):
         global client
         if not client: return
-        sublime.active_window().show_input_panel("Enter document name:", "blag", self.add_current, None, None)
+        if not sublime.active_window().active_view(): return
+        sublime.active_window().show_input_panel("Enter new document name:", sublime.active_window().active_view().name(), self.add_current, None, None)
     def is_enabled(self):
         global client
         return client

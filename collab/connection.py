@@ -5,6 +5,8 @@ import json, threading, socket, base64, hashlib
 def unicode_to_str(obj):
     return dict((str(x) if isinstance(x, unicode) else x, str(y) if isinstance(y, unicode) else y) for x, y in obj.iteritems())
 
+
+
 class ClientSocket(threading.Thread):
     def __init__(self, host, port):
         threading.Thread.__init__(self)
@@ -12,6 +14,9 @@ class ClientSocket(threading.Thread):
         self.host = host
         self.port = port
         self.sock = None
+
+        self.saved_data = ''
+        self.target_size = None
 
         self.keep_running = True
 
@@ -35,7 +40,8 @@ class ClientSocket(threading.Thread):
 
     def send(self, data):
         #print('Sending:{0}'.format(data))
-        self.sock.send(data)
+        msg = json.dumps(data)
+        self.sock.send("0"*(10-len(str(len(msg))))+str(len(msg))+msg)
 
     def close(self):
         self.keep_running = False
@@ -44,14 +50,27 @@ class ClientSocket(threading.Thread):
 
     def run(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.connect((self.host, self.port))
+        try:
+            self.sock.connect((self.host, self.port))
+        except:
+            self.emit('error', 'could not connect to server')
+            self.emit('close')
+            self.sock = None
+            return
         self.emit('open')
         while self.keep_running:
-            data = self.sock.recv(1024)
+            data = self.sock.recv(self.target_size if self.target_size else 10)
             if data is None or data == "":
                 break
             #print('Recieved:{0}'.format(data))
-            self.emit('message', json.loads(data, object_hook=unicode_to_str))
+            if self.target_size:
+                self.saved_data += data
+                if len(self.saved_data) == self.target_size:
+                    self.emit('message', json.loads(data, object_hook=unicode_to_str))
+                    self.saved_data = ''
+                    self.target_size = None
+            else:
+                self.target_size = int(data)
 
         self.sock.close()
         self.emit('close')
@@ -68,6 +87,9 @@ class ServerSocket(threading.Thread):
 
         self.address = addr
         self.headers = None
+
+        self.saved_data = ''
+        self.target_size = None
 
         self._ready = False
         self._events = {}
@@ -90,13 +112,24 @@ class ServerSocket(threading.Thread):
 
     def run(self):
         self._ready = True
+        self.emit('ok')
 
         while self._ready:
-            data = self.sock.recv(1024)
-            if not data or data == "":
+            try:
+                data = self.sock.recv(self.target_size if self.target_size else 10)
+            except:
+                break
+            if data is None or data == "":
                 break
             #print('Recieved from {0}:{1}'.format(self.address, data))
-            self.emit('message', json.loads(data, object_hook=unicode_to_str))
+            if self.target_size:
+                self.saved_data += data
+                if len(self.saved_data) == self.target_size:
+                    self.emit('message', json.loads(data, object_hook=unicode_to_str))
+                    self.saved_data = ''
+                    self.target_size = None
+            else:
+                self.target_size = int(data)
 
         self._ready = False
         self.emit('close')
@@ -106,12 +139,11 @@ class ServerSocket(threading.Thread):
         self._ready = False
         self.sock.shutdown(socket.SHUT_RDWR)
 
-    def send(self, msg):
-        if not self._ready:
-            return
-        msg = json.dumps(msg)
+    def send(self, data):
+        if not self._ready: return
         #print('Sending to {0}:{1}'.format(self.address, msg))
-        self.sock.send(msg)
+        msg = json.dumps(data)
+        self.sock.send("0"*(10-len(str(len(msg))))+str(len(msg))+msg)
 
     def ready(self):
         return self._ready

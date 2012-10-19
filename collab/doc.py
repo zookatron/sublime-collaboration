@@ -1,7 +1,7 @@
-import doctypes, functools
+import functools, optransform
 
 class CollabDoc():
-    def __init__(self, connection, name, doctype, snapshot=None):
+    def __init__(self, connection, name, snapshot=None):
         self.connection = connection
         self.name = name
         self.version = 0
@@ -10,15 +10,7 @@ class CollabDoc():
 
         self._events = {}
 
-        self.doctype = doctype()
-        if hasattr(doctype, 'api'):
-            for var in self.doctype.api.__class__.__dict__:
-                try:
-                    self.__dict__[var] = functools.partial(self.doctype.api.__class__.__dict__[var], self)
-                except:
-                    self.__dict__[var] = self.doctype.api.__class__.__dict__[var]
-            if hasattr(self, '_register'):
-                self._register()
+        self.on('remoteop', self.on_doc_remoteop)
 
         self.connection.on('closed', lambda data: self.set_state('closed', data))
 
@@ -51,14 +43,37 @@ class CollabDoc():
         self.state = state
 
         if state is 'closed':
-            if self._openCallback: self._openCallback(data, None)
+            if self._openCallback: self._openCallback(data if data else "disconnected", None)
 
         self.emit(state, data)
+
+    def getLength(self):
+        return len(self.snapshot)
+
+    def getText(self):
+        return self.snapshot
+
+    def insert(self, pos, text, callback=None):
+        op = [{'p':pos, 'i':text}]
+        self.submitOp(op, callback)
+        return op
     
+    def delete(self, pos, length, callback=None):
+        op = [{'p':pos, 'd':self.snapshot[pos:(pos+length)]}]
+        self.submitOp(op, callback)
+        return op
+
+    def on_doc_remoteop(self, op, snapshot):
+        for component in op:
+            if 'i' in component:
+                self.emit('insert', component['p'], component['i'])
+            else:
+                self.emit('delete', component['p'], component['d'])
+
     def open(self, callback=None):
         if self.state != 'closed': return
 
-        self.connection.send({'doc': self.name, 'open': True, 'snapshot': self.snapshot, 'type': self.doctype.name, 'create': True})
+        self.connection.send({'doc': self.name, 'open': True, 'snapshot': self.snapshot, 'create': True})
         self.set_state('opening')
 
         self._openCallback = callback
@@ -68,12 +83,12 @@ class CollabDoc():
         self.set_state('closed', 'closed by local client')
 
     def submitOp(self, op, callback):
-        op = self.doctype.normalize(op)
+        op = optransform.normalize(op)
 
-        self.snapshot = self.doctype.apply(self.snapshot, op)
+        self.snapshot = optransform.apply(self.snapshot, op)
 
         if self.pendingOp is not None:
-            self.pendingOp = self.doctype.compose(self.pendingOp, op)
+            self.pendingOp = optransform.compose(self.pendingOp, op)
         else:
             self.pendingOp = op
 
@@ -102,7 +117,7 @@ class CollabDoc():
 
         def _otApply(docOp, isRemote):
             oldSnapshot = self.snapshot
-            self.snapshot = self.doctype.apply(self.snapshot, docOp)
+            self.snapshot = optransform.apply(self.snapshot, docOp)
 
             self.emit('change', docOp, oldSnapshot)
             if isRemote:
@@ -112,7 +127,7 @@ class CollabDoc():
             if msg['open'] == True:
 
                 if 'create' in msg and msg['create'] and not self.snapshot:
-                    self.snapshot = self.doctype.create()
+                    self.snapshot = ''
                 else:
                     if 'snapshot' in msg:
                         self.snapshot = msg['snapshot']
@@ -146,9 +161,9 @@ class CollabDoc():
 
             if 'error' in msg:
                 error = msg['error']
-                undo = self.doctype.invert(oldInflightOp)
+                undo = optransform.invert(oldInflightOp)
                 if self.pendingOp:
-                    self.pendingOp, undo = self.doctype.transformX(self.pendingOp, undo)
+                    self.pendingOp, undo = optransform.transform_x(self.pendingOp, undo)
                 _otApply(undo, True)
 
                 for callback in self.inflightCallbacks:
@@ -169,9 +184,9 @@ class CollabDoc():
             self.serverOps[self.version] = op
 
             if self.inflightOp is not None:
-                [self.inflightOp, op] = self.doctype.transformX(self.inflightOp, op)
+                [self.inflightOp, op] = optransform.transform_x(self.inflightOp, op)
             if self.pendingOp is not None:
-                [self.pendingOp, op] = self.doctype.transformX(self.pendingOp, op)
+                [self.pendingOp, op] = optransform.transform_x(self.pendingOp, op)
                 
             self.version += 1
             _otApply(op, True)
