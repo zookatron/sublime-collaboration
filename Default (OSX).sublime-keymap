@@ -1,0 +1,7 @@
+[
+{ "keys": ["command+alt+c"], "command": "collab_connect_to_server" },
+{ "keys": ["command+alt+d"], "command": "collab_disconnect_from_server" },
+{ "keys": ["command+alt+o"], "command": "collab_open_document" },
+{ "keys": ["command+alt+s"], "command": "collab_toggle_server" },
+{ "keys": ["command+alt+a"], "command": "collab_add_current_document" }
+]
