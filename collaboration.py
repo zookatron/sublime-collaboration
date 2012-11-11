@@ -58,16 +58,15 @@ class SublimeEditor(object):
         self.doc = doc
         self._events = {}
         self.state = "ok"
+        self.in_remoteop = False
 
         SublimeListener.on("modified", self._on_view_modified)
         SublimeListener.on("close", self._on_view_close)
         SublimeListener.on("post_save", self._on_view_post_save)
+        self.doc.on("closed", self.close)
+        self.doc.on("remoteop", self._on_doc_remoteop)
 
-        self.prevvalue = self.doc.getText()
-        sublime.set_timeout(lambda: self._replaceText(self.prevvalue), 0)
-        self.doc.on('closed', self.close)
-        self.doc.on('insert', self._on_doc_insert)
-        self.doc.on('delete', self._on_doc_delete)
+        sublime.set_timeout(lambda: self._initialize(self.doc.get_text()), 0)
 
         print("opened "+doc.name)
 
@@ -97,31 +96,33 @@ class SublimeEditor(object):
             self.doc.close()
             SublimeListener.removeListener("modified", self._on_view_modified)
             SublimeListener.removeListener("close", self._on_view_close)
-            self.doc.removeListener('insert', self._on_doc_insert)
-            self.doc.removeListener('delete', self._on_doc_delete)
+            SublimeListener.removeListener("post_save", self._on_view_post_save)
+            self.doc.removeListener("closed", self.close)
+            self.doc.removeListener("remoteop", self._on_doc_remoteop)
             self.view = None
             self.doc = None
             self.emit("closed")
 
     def _on_view_modified(self, view):
-        if not self.view: return
+        if self.in_remoteop: return
+        if self.view == None: return
         if view.id() == self.view.id() and self.doc:
-            self.prevvalue = self._getText()
-            self._applyChange(self.doc, self.doc.getText(), self.prevvalue)
+            self._apply_change(self.doc, self.doc.get_text(), self._get_text())
 
     def _on_view_post_save(self, view):
-        if not self.view: return
+        if self.view == None: return
         if view.id() == self.view.id() and self.doc:
             view.set_scratch(False)
 
     def _on_view_close(self, view):
-        if not self.view: return
+        if self.view == None: return
         if view.id() == self.view.id() and self.doc:
             self.close()
 
-    def _applyChange(self, doc, oldval, newval):
+    def _apply_change(self, doc, oldval, newval):
         if oldval == newval:
             return
+
         commonStart = 0
         while commonStart < len(oldval) and commonStart < len(newval) and oldval[commonStart] == newval[commonStart]:
             commonStart+=1
@@ -135,30 +136,28 @@ class SublimeEditor(object):
         if len(newval) != commonStart+commonEnd:
             doc.insert(commonStart, newval[commonStart:len(newval)-commonEnd])
 
-    def _on_doc_insert(self, pos, text):
-        sublime.set_timeout(lambda: self._insertText(pos, text), 0)
-
-    def _on_doc_delete(self, pos, text):
-        sublime.set_timeout(lambda: self._deleteText(pos, text), 0)
+    def _on_doc_remoteop(self, op, old_snapshot):
+        sublime.set_timeout(lambda: self._apply_remoteop(op), 0)
     
-    def _getText(self):
+    def _get_text(self):
         return self.view.substr(sublime.Region(0, self.view.size())).replace('\r\n', '\n')
 
-    def _replaceText(self, text):
-        if self._getText() == text: return
+    def _initialize(self, text):
+        if self._get_text() == text: return
         edit = self.view.begin_edit()
         self.view.replace(edit, sublime.Region(0, self.view.size()), text)
         self.view.end_edit(edit)
 
-    def _insertText(self, pos, text):
+    def _apply_remoteop(self, op):
+        self.in_remoteop = True
         edit = self.view.begin_edit()
-        self.view.insert(edit, pos, text)
+        for component in op:
+            if 'i' in component:
+                self.view.insert(edit, component['p'], component['i'])
+            else:
+                self.view.erase(edit, sublime.Region(component['p'], component['p']+len(component['d'])))
         self.view.end_edit(edit)
-
-    def _deleteText(self, pos, text):
-        edit = self.view.begin_edit()
-        self.view.erase(edit, sublime.Region(pos, pos+len(text)))
-        self.view.end_edit(edit)
+        self.in_remoteop = False
 
 
 
@@ -210,7 +209,7 @@ class SublimeCollaboration(object):
         if name in editors:
             return editors[name].focus()
         view = sublime.active_window().active_view()
-        if view:
+        if view != None:
             client.open(name, lambda error, doc: self.add_callback(view, error, doc), snapshot=view.substr(sublime.Region(0, view.size())))
 
     def open_callback(self, error, doc):
@@ -276,7 +275,8 @@ class CollabAddCurrentDocumentCommand(sublime_plugin.ApplicationCommand, Sublime
     def run(self):
         global client
         if not client: return
-        if not sublime.active_window().active_view(): return
+        if sublime.active_window() == None: return
+        if sublime.active_window().active_view() == None: return
         sublime.active_window().show_input_panel("Enter new document name:", sublime.active_window().active_view().name(), self.add_current, None, None)
     def is_enabled(self):
         global client

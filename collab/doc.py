@@ -14,13 +14,13 @@ class CollabDoc():
 
         self.connection.on('closed', lambda data: self.set_state('closed', data))
 
-        self.inflightOp = None
-        self.inflightCallbacks = []
-        self.pendingOp = None
-        self.pendingCallbacks = []
-        self.serverOps = {}
+        self.inflight_op = None
+        self.inflight_callbacks = []
+        self.pending_op = None
+        self.pending_callbacks = []
+        self.server_ops = {}
 
-        self._openCallback = None
+        self._open_callback = None
 
     def on(self, event, fct):
         if event not in self._events: self._events[event] = []
@@ -43,24 +43,24 @@ class CollabDoc():
         self.state = state
 
         if state is 'closed':
-            if self._openCallback: self._openCallback(data if data else "disconnected", None)
+            if self._open_callback: self._open_callback(data if data else "disconnected", None)
 
         self.emit(state, data)
 
-    def getLength(self):
+    def __len__(self):
         return len(self.snapshot)
 
-    def getText(self):
+    def get_text(self):
         return self.snapshot
 
     def insert(self, pos, text, callback=None):
         op = [{'p':pos, 'i':text}]
-        self.submitOp(op, callback)
+        self.submit_op(op, callback)
         return op
     
     def delete(self, pos, length, callback=None):
         op = [{'p':pos, 'd':self.snapshot[pos:(pos+length)]}]
-        self.submitOp(op, callback)
+        self.submit_op(op, callback)
         return op
 
     def on_doc_remoteop(self, op, snapshot):
@@ -76,52 +76,51 @@ class CollabDoc():
         self.connection.send({'doc': self.name, 'open': True, 'snapshot': self.snapshot, 'create': True})
         self.set_state('opening')
 
-        self._openCallback = callback
+        self._open_callback = callback
 
     def close(self):
         self.connection.send({'doc':self.name, 'open':False})
         self.set_state('closed', 'closed by local client')
 
-    def submitOp(self, op, callback):
+    def submit_op(self, op, callback):
         op = optransform.normalize(op)
-
         self.snapshot = optransform.apply(self.snapshot, op)
 
-        if self.pendingOp is not None:
-            self.pendingOp = optransform.compose(self.pendingOp, op)
+        if self.pending_op is not None:
+            self.pending_op = optransform.compose(self.pending_op, op)
         else:
-            self.pendingOp = op
+            self.pending_op = op
 
         if callback:
-            self.pendingCallbacks.append(callback)
+            self.pending_callbacks.append(callback)
 
         self.emit('change', op)
 
         self.flush()
 
     def flush(self):
-        if not (self.connection.state == 'ok' and self.inflightOp is None and self.pendingOp is not None):
+        if not (self.connection.state == 'ok' and self.inflight_op is None and self.pending_op is not None):
             return
 
-        self.inflightOp = self.pendingOp
-        self.inflightCallbacks = self.pendingCallbacks
+        self.inflight_op = self.pending_op
+        self.inflight_callbacks = self.pending_callbacks
 
-        self.pendingOp = None
-        self.pendingCallbacks = []
+        self.pending_op = None
+        self.pending_callbacks = []
 
-        self.connection.send({'doc':self.name, 'op':self.inflightOp, 'v':self.version})
+        self.connection.send({'doc':self.name, 'op':self.inflight_op, 'v':self.version})
+
+    def apply_op(self, op, is_remote):
+        oldSnapshot = self.snapshot
+        self.snapshot = optransform.apply(self.snapshot, op)
+
+        self.emit('change', op, oldSnapshot)
+        if is_remote:
+            self.emit('remoteop', op, oldSnapshot)
 
     def on_message(self, msg):
         if msg['doc'] != self.name:
             return self.emit('error', "Expected docName '{0}' but got {1}".format(self.name, msg['doc']))
-
-        def _otApply(docOp, isRemote):
-            oldSnapshot = self.snapshot
-            self.snapshot = optransform.apply(self.snapshot, docOp)
-
-            self.emit('change', docOp, oldSnapshot)
-            if isRemote:
-                self.emit('remoteop', docOp, oldSnapshot)
 
         if 'open' in msg:
             if msg['open'] == True:
@@ -138,16 +137,16 @@ class CollabDoc():
                 self.state = 'open'
                 self.emit('open')
                 
-                if self._openCallback:
-                    self._openCallback(None, self)
-                    self._openCallback = None
+                if self._open_callback:
+                    self._open_callback(None, self)
+                    self._open_callback = None
      
             elif msg['open'] == False:
                 if 'error' in msg:
                     self.emit('error', msg['error'])
-                    if self._openCallback:
-                        self._openCallback(msg['error'], None)
-                        self._openCallback = None
+                    if self._open_callback:
+                        self._open_callback(msg['error'], None)
+                        self._open_callback = None
 
                 self.set_state('closed', 'closed by remote server')
                 self.connection.closed(self.name)
@@ -155,24 +154,22 @@ class CollabDoc():
         elif 'op' not in msg and 'v' in msg:
             if msg['v'] != self.version:
                 return self.emit('error', "Expected version {0} but got {1}".format(self.version, msg['v']))
-                
-            oldInflightOp = self.inflightOp
-            self.inflightOp = None
+
+            oldinflight_op = self.inflight_op
+            self.inflight_op = None
 
             if 'error' in msg:
                 error = msg['error']
-                undo = optransform.invert(oldInflightOp)
-                if self.pendingOp:
-                    self.pendingOp, undo = optransform.transform_x(self.pendingOp, undo)
-                _otApply(undo, True)
-
-                for callback in self.inflightCallbacks:
+                undo = optransform.invert(oldinflight_op)
+                if self.pending_op:
+                    self.pending_op, undo = optransform.transform_x(self.pending_op, undo)
+                for callback in self.inflight_callbacks:
                     callback(error, None)
             else:
-                self.serverOps[self.version] = oldInflightOp
+                self.server_ops[self.version] = oldinflight_op
                 self.version += 1
-                for callback in self.inflightCallbacks:
-                    callback(None, oldInflightOp)
+                for callback in self.inflight_callbacks:
+                    callback(None, oldinflight_op)
 
             self.flush()
 
@@ -181,15 +178,14 @@ class CollabDoc():
                 return self.emit('error', "Expected version {0} but got {1}".format(self.version, msg['v']))
 
             op = msg['op']
-            self.serverOps[self.version] = op
+            self.server_ops[self.version] = op
 
-            if self.inflightOp is not None:
-                [self.inflightOp, op] = optransform.transform_x(self.inflightOp, op)
-            if self.pendingOp is not None:
-                [self.pendingOp, op] = optransform.transform_x(self.pendingOp, op)
+            if self.inflight_op is not None:
+                self.inflight_op, op = optransform.transform_x(self.inflight_op, op)
+            if self.pending_op is not None:
+                self.pending_op, op = optransform.transform_x(self.pending_op, op)
                 
             self.version += 1
-            _otApply(op, True)
-
+            self.apply_op(op, True)
         else:
             logging.error('Unhandled document message: {0}'.format(msg))

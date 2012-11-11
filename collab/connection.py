@@ -116,7 +116,7 @@ class ServerSocket(threading.Thread):
                 break
             if data is None or data == "":
                 break
-            #print('Recieved from {0}:{1}'.format(self.address, data))
+            #print('Server Recieved from {0}:{1}'.format(self.address, data))
             if self.target_size:
                 self.saved_data += data
                 if len(self.saved_data) == self.target_size:
@@ -136,7 +136,7 @@ class ServerSocket(threading.Thread):
 
     def send(self, data):
         if not self._ready: return
-        #print('Sending to {0}:{1}'.format(self.address, msg))
+        #print('Server Sending to {0}:{1}'.format(self.address, data))
         msg = json.dumps(data)
 
         #A pretty terrible hacky framing system, I'll need to come up with a better one soon

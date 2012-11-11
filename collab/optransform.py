@@ -9,7 +9,7 @@ def apply(snapshot, op):
             deleted = snapshot[component['p']:(component['p'] + len(component['d']))]
             if(component['d'] != deleted): raise Exception("Delete component '{0}' does not match deleted text '{1}'".format(component['d'], deleted))
             snapshot = snapshot[:component['p']] + snapshot[(component['p'] + len(component['d'])):]
-        return snapshot
+    return snapshot
 
 def append(newOp, c):
     if 'i' in c and c['i'] == '': return
