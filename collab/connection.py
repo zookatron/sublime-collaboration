@@ -36,7 +36,10 @@ class ClientSocket(threading.Thread):
         msg = json.dumps(data)
 
         #A pretty terrible hacky framing system, I'll need to come up with a better one soon
-        self.sock.send(u"0"*(10-len(unicode(len(msg))))+unicode(len(msg))+msg)
+        try:
+            self.sock.send(u"0"*(10-len(unicode(len(msg))))+unicode(len(msg))+msg)
+        except:
+            self.close()
 
     def close(self):
         self.keep_running = False
@@ -54,14 +57,17 @@ class ClientSocket(threading.Thread):
             return
         self.emit('open')
         while self.keep_running:
-            data = self.sock.recv(self.target_size if self.target_size else 10)
+            try:
+                data = self.sock.recv(self.target_size if self.target_size else 10)
+            except:
+                break
             if data is None or data == "":
                 break
             #print('Recieved:{0}'.format(data))
             if self.target_size:
                 self.saved_data += data
                 if len(self.saved_data) == self.target_size:
-                    self.emit('message', json.loads(data, "utf-8"))
+                    self.emit('message', json.loads(self.saved_data, "utf-8"))
                     self.saved_data = ''
                     self.target_size = None
             else:
@@ -120,7 +126,7 @@ class ServerSocket(threading.Thread):
             if self.target_size:
                 self.saved_data += data
                 if len(self.saved_data) == self.target_size:
-                    self.emit('message', json.loads(data, "utf-8"))
+                    self.emit('message', json.loads(self.saved_data, "utf-8"))
                     self.saved_data = ''
                     self.target_size = None
             else:
@@ -140,7 +146,10 @@ class ServerSocket(threading.Thread):
         msg = json.dumps(data)
 
         #A pretty terrible hacky framing system, I'll need to come up with a better one soon
-        self.sock.send(u"0"*(10-len(unicode(len(msg))))+unicode(len(msg))+msg)
+        try:
+            self.sock.send(u"0"*(10-len(unicode(len(msg))))+unicode(len(msg))+msg)
+        except:
+            self.close()
 
     def ready(self):
         return self._ready
