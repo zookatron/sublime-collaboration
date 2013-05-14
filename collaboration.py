@@ -138,7 +138,7 @@ class SublimeEditor(object):
 
     def _on_doc_remoteop(self, op, old_snapshot):
         sublime.set_timeout(lambda: self._apply_remoteop(op), 0)
-    
+
     def _get_text(self):
         return self.view.substr(sublime.Region(0, self.view.size())).replace('\r\n', '\n')
 
@@ -188,6 +188,7 @@ class SublimeCollaboration(object):
     def open_get_docs(self, error, items):
         global client
         if not client: return
+
         if error:
             sublime.error_message("Error retrieving document names: {0}".format(error))
         else:
@@ -200,6 +201,7 @@ class SublimeCollaboration(object):
         global client
         if not client: return
         if name in editors:
+            print(name+" is already open")
             return editors[name].focus()
         client.open(name, self.open_callback)
 
@@ -207,8 +209,10 @@ class SublimeCollaboration(object):
         global client
         if not client: return
         if name in editors:
+            print(name+" is already open")
             return editors[name].focus()
         view = sublime.active_window().active_view()
+        if view.id() in (editor.view.id() for editor in editors.values()): return
         if view != None:
             client.open(name, lambda error, doc: self.add_callback(view, error, doc), snapshot=view.substr(sublime.Region(0, view.size())))
 
@@ -273,11 +277,17 @@ class CollabOpenDocumentCommand(sublime_plugin.ApplicationCommand, SublimeCollab
 
 class CollabAddCurrentDocumentCommand(sublime_plugin.ApplicationCommand, SublimeCollaboration):
     def run(self):
-        global client
+        global client, editors
         if not client: return
         if sublime.active_window() == None: return
-        if sublime.active_window().active_view() == None: return
-        sublime.active_window().show_input_panel("Enter new document name:", sublime.active_window().active_view().name(), self.add_current, None, None)
+        view = sublime.active_window().active_view()
+        if view == None: return
+        if view.id() in (editor.view.id() for editor in editors.values()): return
+        sublime.active_window().show_input_panel("Enter new document name:", view.name(), self.add_current, None, None)
     def is_enabled(self):
         global client
         return client
+
+class CollabToggleDebugCommand(sublime_plugin.ApplicationCommand, SublimeCollaboration):
+    def run(self):
+        collab.connection.debug = not collab.connection.debug

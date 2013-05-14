@@ -1,5 +1,7 @@
 import json, threading, socket, base64, hashlib
 
+debug = False
+
 class ClientSocket(threading.Thread):
     def __init__(self, host, port):
         threading.Thread.__init__(self)
@@ -32,7 +34,10 @@ class ClientSocket(threading.Thread):
         return self
 
     def send(self, data):
-        #print('Sending:{0}'.format(data))
+        global debug
+        if debug:
+            print('Sending:{0}'.format(data))
+
         msg = json.dumps(data)
 
         #A pretty terrible hacky framing system, I'll need to come up with a better one soon
@@ -63,7 +68,11 @@ class ClientSocket(threading.Thread):
                 break
             if data is None or data == "":
                 break
-            #print('Recieved:{0}'.format(data))
+
+            global debug
+            if debug:
+                print('Recieved:{0}'.format(data))
+
             if self.target_size:
                 self.saved_data += data
                 if len(self.saved_data) == self.target_size:
@@ -122,7 +131,11 @@ class ServerSocket(threading.Thread):
                 break
             if data is None or data == "":
                 break
-            #print('Server Recieved from {0}:{1}'.format(self.address, data))
+
+            global debug
+            if debug:
+                print('Server Recieved from {0}:{1}'.format(self.address, data))
+
             if self.target_size:
                 self.saved_data += data
                 if len(self.saved_data) == self.target_size:
@@ -142,7 +155,11 @@ class ServerSocket(threading.Thread):
 
     def send(self, data):
         if not self._ready: return
-        #print('Server Sending to {0}:{1}'.format(self.address, data))
+
+        global debug
+        if debug:
+            print('Server Sending to {0}:{1}'.format(self.address, data))
+
         msg = json.dumps(data)
 
         #A pretty terrible hacky framing system, I'll need to come up with a better one soon

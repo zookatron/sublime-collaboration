@@ -47,9 +47,6 @@ class CollabDoc():
 
         self.emit(state, data)
 
-    def __len__(self):
-        return len(self.snapshot)
-
     def get_text(self):
         return self.snapshot
 
@@ -57,7 +54,7 @@ class CollabDoc():
         op = [{'p':pos, 'i':text}]
         self.submit_op(op, callback)
         return op
-    
+
     def delete(self, pos, length, callback=None):
         op = [{'p':pos, 'd':self.snapshot[pos:(pos+length)]}]
         self.submit_op(op, callback)
@@ -136,11 +133,11 @@ class CollabDoc():
 
                 self.state = 'open'
                 self.emit('open')
-                
+
                 if self._open_callback:
                     self._open_callback(None, self)
                     self._open_callback = None
-     
+
             elif msg['open'] == False:
                 if 'error' in msg:
                     self.emit('error', msg['error'])
@@ -184,7 +181,7 @@ class CollabDoc():
                 self.inflight_op, op = optransform.transform_x(self.inflight_op, op)
             if self.pending_op is not None:
                 self.pending_op, op = optransform.transform_x(self.pending_op, op)
-                
+
             self.version += 1
             self.apply_op(op, True)
         else:
