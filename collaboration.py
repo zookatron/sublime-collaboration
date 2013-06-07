@@ -172,17 +172,20 @@ class SublimeCollaboration(object):
         client = collab.client.CollabClient(host, 6633)
         client.on('error', lambda error: sublime.error_message("Client error: {0}".format(error)))
         client.on('closed', self.on_close)
+        self.set_status()
         print("connected")
 
     def disconnect(self):
         global client
         if not client: return
         client.disconnect()
+        self.set_status()
 
     def on_close(self, reason=None):
         global client
         if not client: return
         client = None
+        self.set_status()
         print("disconnected")
 
     def open_get_docs(self, error, items):
@@ -204,6 +207,7 @@ class SublimeCollaboration(object):
             print(name+" is already open")
             return editors[name].focus()
         client.open(name, self.open_callback)
+        self.set_status()
 
     def add_current(self, name):
         global client
@@ -215,6 +219,7 @@ class SublimeCollaboration(object):
         if view.id() in (editor.view.id() for editor in editors.values()): return
         if view != None:
             client.open(name, lambda error, doc: self.add_callback(view, error, doc), snapshot=view.substr(sublime.Region(0, view.size())))
+        self.set_status()
 
     def open_callback(self, error, doc):
         if error:
@@ -233,6 +238,7 @@ class SublimeCollaboration(object):
         view.set_scratch(True)
         view.set_name(doc.name)
         self.add_editor(view, doc)
+        self.set_status()
 
     def add_editor(self, view, doc):
         global editors
@@ -245,11 +251,36 @@ class SublimeCollaboration(object):
         if server:
             server.close()
             server = None
+            self.set_status()
             print("server closed")
         else:
             server = collab.server.CollabServer({'host':'127.0.0.1', 'port':6633})
             server.run_forever()
             print("server started")
+            self.set_status()
+
+    def set_status(self):
+        global server, client
+
+        if server or client:
+            if server:
+                server_status = 'running'
+            else:
+                server_status = 'off'
+
+            if client:
+                host = client.socket.host
+                state = client.state
+                client_status = 'client:%(host)s...%(state)s' % locals()
+            else:
+                client_status = 'disconnected'
+
+            status_value = "Collab (server:%(server_status)s; %(client_status)s)" % locals()
+        else:
+            status_value = ''
+
+        for view in sublime.active_window().views():
+            view.set_status('collab_server_status', status_value)
 
 class CollabConnectToServerCommand(sublime_plugin.ApplicationCommand, SublimeCollaboration):
     def run(self):
