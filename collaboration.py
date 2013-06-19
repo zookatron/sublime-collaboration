@@ -246,10 +246,12 @@ class SublimeCollaboration(object):
             server.close()
             server = None
             print("server closed")
+            sublime.active_window().active_view().set_status('Collab','Collab server OFF');
         else:
             server = collab.server.CollabServer({'host':'127.0.0.1', 'port':6633})
             server.run_forever()
             print("server started")
+            sublime.active_window().active_view().set_status('Collab','Collab server ON');
 
 class CollabConnectToServerCommand(sublime_plugin.ApplicationCommand, SublimeCollaboration):
     def run(self):
