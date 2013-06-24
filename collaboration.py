@@ -251,13 +251,12 @@ class SublimeCollaboration(object):
         if server:
             server.close()
             server = None
-            self.set_status()
             print("server closed")
         else:
             server = collab.server.CollabServer({'host':'127.0.0.1', 'port':6633})
             server.run_forever()
             print("server started")
-            self.set_status()
+        self.set_status()
 
     def set_status(self):
         global server, client
