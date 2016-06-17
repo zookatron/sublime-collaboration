@@ -1,4 +1,7 @@
-import functools, optransform
+import functools, logging
+from .optransform import op_normalize, op_apply, op_compose, op_invert, op_transform_x
+
+logger = logging.getLogger('Sublime Collaboration')
 
 class CollabDoc():
     def __init__(self, connection, name, snapshot=None):
@@ -80,11 +83,11 @@ class CollabDoc():
         self.set_state('closed', 'closed by local client')
 
     def submit_op(self, op, callback):
-        op = optransform.normalize(op)
-        self.snapshot = optransform.apply(self.snapshot, op)
+        op = op_normalize(op)
+        self.snapshot = op_apply(self.snapshot, op)
 
         if self.pending_op is not None:
-            self.pending_op = optransform.compose(self.pending_op, op)
+            self.pending_op = op_compose(self.pending_op, op)
         else:
             self.pending_op = op
 
@@ -109,7 +112,7 @@ class CollabDoc():
 
     def apply_op(self, op, is_remote):
         oldSnapshot = self.snapshot
-        self.snapshot = optransform.apply(self.snapshot, op)
+        self.snapshot = op_apply(self.snapshot, op)
 
         self.emit('change', op, oldSnapshot)
         if is_remote:
@@ -157,9 +160,9 @@ class CollabDoc():
 
             if 'error' in msg:
                 error = msg['error']
-                undo = optransform.invert(oldinflight_op)
+                undo = op_invert(oldinflight_op)
                 if self.pending_op:
-                    self.pending_op, undo = optransform.transform_x(self.pending_op, undo)
+                    self.pending_op, undo = op_transform_x(self.pending_op, undo)
                 for callback in self.inflight_callbacks:
                     callback(error, None)
             else:
@@ -178,11 +181,11 @@ class CollabDoc():
             self.server_ops[self.version] = op
 
             if self.inflight_op is not None:
-                self.inflight_op, op = optransform.transform_x(self.inflight_op, op)
+                self.inflight_op, op = op_transform_x(self.inflight_op, op)
             if self.pending_op is not None:
-                self.pending_op, op = optransform.transform_x(self.pending_op, op)
+                self.pending_op, op = op_transform_x(self.pending_op, op)
 
             self.version += 1
             self.apply_op(op, True)
         else:
-            logging.error('Unhandled document message: {0}'.format(msg))
+            logger.error('Unhandled document message: {0}'.format(msg))

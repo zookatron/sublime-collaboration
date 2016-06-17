@@ -1,4 +1,8 @@
-import logging, doc, connection
+import logging
+from .doc import CollabDoc
+from .connection import ClientSocket
+
+logger = logging.getLogger('Sublime Collaboration')
 
 class CollabClient:
     def __init__(self, host, port):
@@ -10,7 +14,7 @@ class CollabClient:
         self.connected = False
         self.id = None
 
-        self.socket = connection.ClientSocket(host, port)
+        self.socket = ClientSocket(host, port)
         self.socket.on('message', self.socket_message)
         self.socket.on('error', self.socket_error)
         self.socket.on('open', self.socket_open)
@@ -48,7 +52,7 @@ class CollabClient:
     def socket_message(self, msg):
         if 'auth' in msg:
             if msg['auth'] is None or msg['auth'] == '':
-                logging.warning('Authentication failed: {0}'.format(msg['error']))
+                logger.warning('Authentication failed: {0}'.format(msg['error']))
                 self.disconnect()
             else:
                 self.id = msg['auth']
@@ -68,7 +72,7 @@ class CollabClient:
         if 'doc' in msg and msg['doc'] in self.docs:
             self.docs[msg['doc']].on_message(msg)
         else:
-            logging.error('Unhandled message {0}'.format(msg))
+            logger.error('Unhandled message {0}'.format(msg))
 
     def set_state(self, state, data=None):
         if self.state is state: return
@@ -107,7 +111,7 @@ class CollabClient:
         if name in self.docs:
             return callback("doc {0} already open".format(name), None)
 
-        newdoc = doc.CollabDoc(self, name, kwargs.get('snapshot', None))
+        newdoc = CollabDoc(self, name, kwargs.get('snapshot', None))
         self.docs[name] = newdoc
 
         newdoc.open(lambda error, doc: callback(error, doc if not error else None))

@@ -1,6 +1,13 @@
-import json, threading, socket, base64, hashlib
+import json, threading, socket, base64, hashlib, logging, sys
 
-debug = False
+logger = logging.getLogger('Sublime Collaboration')
+
+#A pretty terrible hacky framing system, I'll need to come up with a better one soon
+def send_msg(sock, msg):
+    if sys.version_info[0] < 3:
+        sock.send(unicode("0")*(10-len(unicode(len(msg))))+unicode(len(msg))+msg)
+    else:
+        sock.send(bytes("0"*(10-len(str(len(msg))))+str(len(msg))+msg, 'UTF-8'))
 
 class ClientSocket(threading.Thread):
     def __init__(self, host, port):
@@ -34,15 +41,12 @@ class ClientSocket(threading.Thread):
         return self
 
     def send(self, data):
-        global debug
-        if debug:
-            print('Sending:{0}'.format(data))
+        logger.debug('Client sending: <{0}>'.format(data))
 
         msg = json.dumps(data)
 
-        #A pretty terrible hacky framing system, I'll need to come up with a better one soon
         try:
-            self.sock.send(u"0"*(10-len(unicode(len(msg))))+unicode(len(msg))+msg)
+            send_msg(self.sock, msg)
         except:
             self.close()
 
@@ -66,15 +70,13 @@ class ClientSocket(threading.Thread):
                 data = self.sock.recv(self.target_size if self.target_size else 10)
             except:
                 break
-            if data is None or data == "":
+            if data is None or data == b'':
                 break
 
-            global debug
-            if debug:
-                print('Recieved:{0}'.format(data))
+            logger.debug('Client recieved: <{0}>'.format(data))
 
             if self.target_size:
-                self.saved_data += data
+                self.saved_data += data.decode("utf-8")
                 if len(self.saved_data) == self.target_size:
                     self.emit('message', json.loads(self.saved_data, "utf-8"))
                     self.saved_data = ''
@@ -129,15 +131,13 @@ class ServerSocket(threading.Thread):
                 data = self.sock.recv(self.target_size if self.target_size else 10)
             except:
                 break
-            if data is None or data == "":
+            if data is None or data == b'':
                 break
 
-            global debug
-            if debug:
-                print('Server Recieved from {0}:{1}'.format(self.address, data))
+            logger.debug('Server recieved from {0}: <{1}>'.format(self.address, data))
 
             if self.target_size:
-                self.saved_data += data
+                self.saved_data += data.decode("utf-8")
                 if len(self.saved_data) == self.target_size:
                     self.emit('message', json.loads(self.saved_data, "utf-8"))
                     self.saved_data = ''
@@ -156,15 +156,12 @@ class ServerSocket(threading.Thread):
     def send(self, data):
         if not self._ready: return
 
-        global debug
-        if debug:
-            print('Server Sending to {0}:{1}'.format(self.address, data))
+        logger.debug('Server sending to {0}: <{1}>'.format(self.address, data))
 
         msg = json.dumps(data)
 
-        #A pretty terrible hacky framing system, I'll need to come up with a better one soon
         try:
-            self.sock.send(u"0"*(10-len(unicode(len(msg))))+unicode(len(msg))+msg)
+            send_msg(self.sock, msg)
         except:
             self.close()
 
@@ -217,11 +214,13 @@ class SocketServer:
                 conn, addr = self.sock.accept()
             except socket.timeout:
                 continue
-            #print('Connected by {0}'.format(addr))
+            except OSError:
+                break
+            logger.debug('Server was connected by {0}'.format(addr))
             connection = ServerSocket(conn, addr)
             self.connections.append(connection)
             def on_close():
-                #print('Disconnected by {0}'.format(addr))
+                logger.debug('Server was disconnected by {0}'.format(addr))
                 if connection in self.connections:
                     self.connections.remove(connection)
             connection.on('close', on_close)

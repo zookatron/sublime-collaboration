@@ -1,6 +1,8 @@
 #!/usr/bin/env python
-import sys
-import collab
+import sys, os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from collab.server import CollabServer
 
 def main(argv):
     if len(argv) == 1:
@@ -23,11 +25,11 @@ def main(argv):
         port = 6633
     try:
         sys.stderr.write('Starting at ' + host +':' + str(port) + '...')
-        server = collab.server.CollabServer({'host':host, 'port': int(port)})
+        server = CollabServer({'host':host, 'port': int(port)})
         sys.stderr.write(' started.\n')
         server.run_forever()
     except KeyboardInterrupt:
-        print("^C received, server stopped")
+        sys.stderr.write("^C received, server stopped")
         return -1
 
 if __name__ == '__main__':

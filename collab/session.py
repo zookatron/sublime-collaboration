@@ -1,12 +1,14 @@
-import logging
+import logging, sys
+
+logger = logging.getLogger('Sublime Collaboration')
 
 class CollabSession(object):
-    def __init__(self, connection, model, id):
+    def __init__(self, connection, model, userid):
         self.connection = connection
         self.model = model
 
         self.docs = {}
-        self.userid = id
+        self.userid = userid
 
         if self.connection.ready():
             self.on_session_create()
@@ -29,7 +31,7 @@ class CollabSession(object):
             return self.model.get_docs(lambda e, docs: self.on_get_docs(e, docs, callback))
 
         error = None
-        if 'doc' not in query or not isinstance(query['doc'], (str, unicode)):
+        if 'doc' not in query or not isinstance(query['doc'], (str, unicode) if sys.version_info[0] < 3 else (str, bytes)):
             error = 'doc name invalid or missing'
         if 'create' in query and query['create'] is not True:
             error = "'create' must be True or missing"
@@ -39,7 +41,7 @@ class CollabSession(object):
             error = "'v' invalid"
 
         if error:
-            logging.error("Invalid query {0} from {1}: {2}".format(query, self.userid, error))
+            logger.error("Invalid query {0} from {1}: {2}".format(query, self.userid, error))
             self.connection.abort()
             return callback() if callback else None
 
@@ -68,7 +70,7 @@ class CollabSession(object):
     def handle_message(self, query, callback = None):
         if not self.docs:
             return callback() if callback else None
-        
+
         if 'open' in query and query['open'] == False:
             if 'listener' not in self.docs[query['doc']]:
                 self.send({'doc':query['doc'], 'open':False, 'error':'Doc is not open'})
@@ -88,7 +90,7 @@ class CollabSession(object):
             self.model.apply_op(query['doc'], {'doc':query['doc'], 'v':query['v'], 'op':query['op'], 'source':self.userid}, apply_op)
 
         else:
-            logging.error("Invalid query {0} from {1}".format(query, self.userid))
+            logger.error("Invalid query {0} from {1}".format(query, self.userid))
             self.connection.abort()
             return callback() if callback else None
 
@@ -149,7 +151,7 @@ class CollabSession(object):
             if 'listener' in doc:
                 message['open'] = True
                 return finished(message)
-            
+
             doc['listener'] = self.on_remote_message
 
             def model_listen(error, v):

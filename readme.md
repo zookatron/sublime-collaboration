@@ -1,14 +1,14 @@
 Sublime Collaboration
 =====================
 
-A real-time collaborative editing plugin for Sublime Text 2.
+A real-time collaborative editing plugin for Sublime Text 2/3.
 
 Instructions
 ------------
 Please note that this plugin is in an early beta state, and much of the user interface and API will probably be rewritten at some point, so this is not representative of what the final product will be like.
 
 ### Install
-Put everything in this repo into a folder named Collaboration under the /Data/Packages/ directory in your Sublime Text 2 folder.
+Put everything in this repo into a folder named Collaboration under the /Data/Packages/ directory in your Sublime Text application folder.
 
 #### Commands
 "Collaboration: Connect To Server": Connects to a Sublime Collaboration server. *Default Shortcut: ctrl+alt+c*  

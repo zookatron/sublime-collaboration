@@ -1,4 +1,24 @@
-import collab, sublime, sublime_plugin
+import sublime, sublime_plugin, logging
+
+# intitialize logging
+logger = logging.getLogger('Sublime Collaboration')
+#logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
+
+loggerhandler = logging.StreamHandler()
+loggerhandler.setLevel(logging.NOTSET)
+
+loggerformatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+loggerhandler.setFormatter(loggerformatter)
+
+logger.addHandler(loggerhandler)
+
+try:
+    from .collab.client import CollabClient
+    from .collab.server import CollabServer
+except (ImportError, ValueError):
+    from collab.client import CollabClient
+    from collab.server import CollabServer
 
 class SublimeListener(sublime_plugin.EventListener):
     _events = {}
@@ -68,7 +88,7 @@ class SublimeEditor(object):
 
         sublime.set_timeout(lambda: self._initialize(self.doc.get_text()), 0)
 
-        print("opened "+doc.name)
+        logger.info("opened "+doc.name)
 
     def on(self, event, fct):
         if event not in self._events: self._events[event] = []
@@ -92,7 +112,7 @@ class SublimeEditor(object):
     def close(self, reason=None):
         if self.state != "closed":
             self.state = "closed"
-            print("closed "+self.doc.name+(": "+reason if reason else ''))
+            logger.info("closed "+self.doc.name+(": "+reason if reason else ''))
             self.doc.close()
             SublimeListener.removeListener("modified", self._on_view_modified)
             SublimeListener.removeListener("close", self._on_view_close)
@@ -144,19 +164,15 @@ class SublimeEditor(object):
 
     def _initialize(self, text):
         if self._get_text() == text: return
-        edit = self.view.begin_edit()
-        self.view.replace(edit, sublime.Region(0, self.view.size()), text)
-        self.view.end_edit(edit)
+        self.view.run_command('collab_begin_edit', {'func': 'replace', 'region_start': 0, 'region_end': self.view.size(), 'string': text})
 
     def _apply_remoteop(self, op):
         self.in_remoteop = True
-        edit = self.view.begin_edit()
         for component in op:
             if 'i' in component:
-                self.view.insert(edit, component['p'], component['i'])
+                self.view.run_command('collab_begin_edit', {'func': 'insert', 'point': component['p'], 'string': component['i']})
             else:
-                self.view.erase(edit, sublime.Region(component['p'], component['p']+len(component['d'])))
-        self.view.end_edit(edit)
+                self.view.run_command('collab_begin_edit', {'func': 'erase', 'region_start': component['p'], 'region_end': component['p']+len(component['d'])})
         self.in_remoteop = False
 
 
@@ -169,11 +185,11 @@ class SublimeCollaboration(object):
     def connect(self, host):
         global client
         if client: self.disconnect()
-        client = collab.client.CollabClient(host, 6633)
+        client = CollabClient(host, 6633)
         client.on('error', lambda error: sublime.error_message("Client error: {0}".format(error)))
         client.on('closed', self.on_close)
         self.set_status()
-        print("connected")
+        logger.info("connected to server")
 
     def disconnect(self):
         global client
@@ -186,7 +202,7 @@ class SublimeCollaboration(object):
         if not client: return
         client = None
         self.set_status()
-        print("disconnected")
+        logger.info("disconnected from server")
 
     def open_get_docs(self, error, items):
         global client
@@ -204,7 +220,7 @@ class SublimeCollaboration(object):
         global client
         if not client: return
         if name in editors:
-            print(name+" is already open")
+            logger.info("document "+name+" is already open")
             return editors[name].focus()
         client.open(name, self.open_callback)
         self.set_status()
@@ -213,7 +229,7 @@ class SublimeCollaboration(object):
         global client
         if not client: return
         if name in editors:
-            print(name+" is already open")
+            logger.info("document "+name+" is already open")
             return editors[name].focus()
         view = sublime.active_window().active_view()
         if view.id() in (editor.view.id() for editor in editors.values()): return
@@ -251,11 +267,11 @@ class SublimeCollaboration(object):
         if server:
             server.close()
             server = None
-            print("server closed")
+            logger.info("server closed")
         else:
-            server = collab.server.CollabServer({'host':'127.0.0.1', 'port':6633})
+            server = CollabServer({'host':'127.0.0.1', 'port':6633})
             server.run_forever()
-            print("server started")
+            logger.info("server started")
         self.set_status()
 
     def set_status(self):
@@ -278,8 +294,12 @@ class SublimeCollaboration(object):
         else:
             status_value = ''
 
-        for view in sublime.active_window().views():
-            view.set_status('collab_server_status', status_value)
+        def _set_status():
+            for window in sublime.windows():
+                for view in window.views():
+                    view.set_status('collab_server_status', status_value)
+
+        sublime.set_timeout(_set_status, 0)
 
 class CollabConnectToServerCommand(sublime_plugin.ApplicationCommand, SublimeCollaboration):
     def run(self):
@@ -290,7 +310,7 @@ class CollabDisconnectFromServerCommand(sublime_plugin.ApplicationCommand, Subli
         self.disconnect()
     def is_enabled(self):
         global client
-        return client
+        return bool(client)
 
 class CollabToggleServerCommand(sublime_plugin.ApplicationCommand, SublimeCollaboration):
     def run(self):
@@ -303,7 +323,7 @@ class CollabOpenDocumentCommand(sublime_plugin.ApplicationCommand, SublimeCollab
         client.get_docs(self.open_get_docs)
     def is_enabled(self):
         global client
-        return client
+        return bool(client)
 
 class CollabAddCurrentDocumentCommand(sublime_plugin.ApplicationCommand, SublimeCollaboration):
     def run(self):
@@ -316,8 +336,30 @@ class CollabAddCurrentDocumentCommand(sublime_plugin.ApplicationCommand, Sublime
         sublime.active_window().show_input_panel("Enter new document name:", view.name(), self.add_current, None, None)
     def is_enabled(self):
         global client
-        return client
+        return bool(client)
 
-class CollabToggleDebugCommand(sublime_plugin.ApplicationCommand, SublimeCollaboration):
+class CollabEnableDebugCommand(sublime_plugin.ApplicationCommand, SublimeCollaboration):
     def run(self):
-        collab.connection.debug = not collab.connection.debug
+        logger.setLevel(logging.DEBUG)
+
+
+
+# The new ST3 plugin API sucks
+class CollabBeginEditCommand(sublime_plugin.TextCommand):
+    def run(self, edit, *args, **kwargs):
+        func = kwargs['func']
+        if func == 'replace':
+            self.view.replace(edit, sublime.Region(kwargs['region_start'], kwargs['region_end']), kwargs['string'])
+        elif func == 'insert':
+            self.view.insert(edit, kwargs['point'], kwargs['string'])
+        elif func == 'erase':
+            self.view.erase(edit, sublime.Region(kwargs['region_start'], kwargs['region_end']))
+
+    def is_visible(self):
+        return False
+
+    def is_enabled(self):
+        return True
+
+    def description(self):
+        return

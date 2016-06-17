@@ -1,4 +1,7 @@
-import time, re, logging, optransform
+import time, re, logging
+from .optransform import op_transform, op_apply
+
+logger = logging.getLogger('Sublime Collaboration')
 
 class CollabModel(object):
     def __init__(self, options=None):
@@ -33,17 +36,17 @@ class CollabModel(object):
         ops = doc['ops'][(len(doc['ops'])+op['v']-doc['v']):]
 
         if doc['v'] - op['v'] != len(ops):
-            logging.error("Could not get old ops in model for document {1}. Expected ops {1} to {2} and got {3} ops".format(doc['name'], op['v'], doc['v'], len(ops)))
+            logger.error("Could not get old ops in model for document {1}. Expected ops {1} to {2} and got {3} ops".format(doc['name'], op['v'], doc['v'], len(ops)))
             return callback('Internal error', None)
 
         for oldOp in ops:
-            op['op'] = optransform.transform(op['op'], oldOp['op'], 'left')
+            op['op'] = op_transform(op['op'], oldOp['op'], 'left')
             op['v']+=1
 
-        newSnapshot = optransform.apply(doc['snapshot'], op['op'])
+        newSnapshot = op_apply(doc['snapshot'], op['op'])
 
         if op['v'] != doc['v']:
-            logging.error("Version mismatch detected in model. File a ticket - this is a bug. Expecting {0} == {1}".format(op['v'], doc['v']))
+            logger.error("Version mismatch detected in model. File a ticket - this is a bug. Expecting {0} == {1}".format(op['v'], doc['v']))
             return callback('Internal error', None)
 
         oldSnapshot = doc['snapshot']
@@ -54,7 +57,7 @@ class CollabModel(object):
 
         def save_op_callback(error=None):
             if error:
-                logging.error("Error saving op: {0}".format(error))
+                logger.error("Error saving op: {0}".format(error))
                 return callback(error, None)
             else:
                 return callback(None, op['v'])
