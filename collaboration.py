@@ -1,4 +1,4 @@
-import httplib, socket, time, infinote, sys, xmpp, debuggy, sublime, sublime_plugin
+import httplib, socket, time, infinote, sys, xmpp, debuggy, infinote, sublime, sublime_plugin
 
 class InfinoteClient(object):
 	def __init__(self):
@@ -69,17 +69,17 @@ class InfDirectory(object):
 		return self._initialized
 
 	def handle_message(self, message):
-		if(message.getAttr('name') == "InfDirectory"):
+		if(str(message.getAttr('name')) == "InfDirectory"):
 			children = message.getPayload()
 			for child in children:
 				if(child.getName() == "welcome"):
 					self._initialize(child)
 				if(child.getName() == "explore-begin"):
-					self._get_directory_total = child.getAttr('total')
+					self._get_directory_total = int(child.getAttr('total'))
 					self._get_directory_started = True
 				if(child.getName() == "add-node"):
 					if(not self._get_directory_started): return debuggy.print_debug("unexpected directory node: "+str(child))
-					self._get_directory_info.append(InfDirectoryNode(child.getAttr('id'), child.getAttr('parent'), child.getAttr('name'), child.getAttr('type')))
+					self._get_directory_info.append(InfDirectoryNode(int(child.getAttr('id')), int(child.getAttr('parent')), str(child.getAttr('name')), str(child.getAttr('type'))))
 				if(child.getName() == "explore-end"):
 					if(not self._get_directory_started): return debuggy.print_debug("unexpected directory end: "+str(child))
 					self._get_directory_callback(self._get_directory_info)
@@ -105,13 +105,13 @@ class InfUser(object):
 		self.id = id
 		self.name = name
 		self.status = status
-		self.time = time
+		self.time = infinote.Vector(time)
 		self.caret = caret
 		self.selection = selection
 		self.hue = hue
 
 	def __str__(self):
-		return "<InfDirectoryNode id="+str(self.id)+" name="+str(self.name)+" status="+str(self.status)+" time="+str(self.time)+" caret="+str(self.caret)+" selection="+str(self.selection)+" hue="+str(self.hue)+">"
+		return "<InfUser id="+str(self.id)+" name="+str(self.name)+" status="+str(self.status)+" time="+str(self.time.toString())+" caret="+str(self.caret)+" selection="+str(self.selection)+" hue="+str(self.hue)+">"
 
 class InfTextEditor(object):
 	def __init__(self, node, load_callback=None):
@@ -121,15 +121,59 @@ class InfTextEditor(object):
 		self.name = node.name
 		self._request_seq = get_seq()
 		self._sync_total = None
-		self._sync_data = None
+		self._sync_buffer = None
+		self._sync_vector = None
+		#self._sync_data = None
 		self._load_callback = load_callback
 		self._join_seq = None
 		self._join_suffix = None
 		self._group = None
 		self.users = {}
 		self.user_id = None
-		self.text = ""
+		#self.text = ""
 		client.send('<group publisher="you" name="InfDirectory"><subscribe-session seq="'+str(self._request_seq)+'" id="'+str(self.node_id)+'"/></group>')
+
+		self.log = []
+		self._state = None #infinote.State()
+
+	def add_to_log(self, executedRequest):
+		print("THING CALLED")
+		self.log.append(executedRequest)
+		sublime_sync(self)
+
+	def try_insert(self, params):
+		#user, text
+		print("insert trying:"+str(params))
+		segment = infinote.Segment(params[0], params[3])
+		buffer = infinote.Buffer([segment])
+		#position, buffer
+		operation = infinote.Insert(int(params[2]), buffer)
+		#user, vector
+		request = infinote.DoRequest(params[0], infinote.Vector(params[1]), operation)
+		self._state.queue(request)
+		self._state.executeAll()
+		print(self.get_state())
+
+	def try_delete(self, params):
+		print("delete trying:"+str(params))
+		operation = infinote.Delete(params[2], params[3])
+		#user, vector, operation
+		request = infinote.DoRequest(params[0], infinote.Vector(params[1]), operation)
+		self._state.queue(request)
+		self._state.executeAll()
+		print(self.get_state())
+
+	def try_undo(self, params):
+		request = infinote.UndoRequest(params[0], self._state.vector)
+		self._state.queue(request)
+		self._state.executeAll()
+		print(self.get_state())
+		
+	def get_state(self):
+		return (self._state.vector.toString(), self._state.buffer.toString()) 
+		
+	def get_text(self):
+		return self._state.buffer.toString()
 
 	def _initialize(self):
 		self.status = "loaded"
@@ -139,56 +183,120 @@ class InfTextEditor(object):
 		return self.status == "loaded"
 
 	def handle_message(self, message):
-		if(message.getAttr('name') == "InfDirectory"):
+		if(str(message.getAttr('name')) == "InfDirectory"):
 			children = message.getPayload()
 			for child in children:
 				if(child.getName() == "subscribe-session"):
-					if(child.getAttr('method') != "central"):
+					if(str(child.getAttr('method')) != "central"):
 						self.state = "error"
 						debuggy.print_debug("unsupported method type: "+str(child))
 						client.send('<group publisher="you" name="InfDirectory"><subscribe-nack id="'+str(self.node_id)+'"/></group>')
 					else:
-						self._group = child.getAttr('group')
+						self._group = str(child.getAttr('group'))
 						client.send('<group publisher="you" name="InfDirectory"><subscribe-ack id="'+str(self.node_id)+'"/></group>')
-				if(child.getName() == "request-failed" and str(self._request_seq) in child.getAttr("seq")):
+				elif(child.getName() == "request-failed" and str(self._request_seq) in str(child.getAttr("seq"))):
 					debuggy.print_debug("error domain "+child.getAttr("domain")+" code "+child.getAttr("code")+": "+child.getData())
 					self.status = "error"
-		elif(message.getAttr('name') == self._group):
+		elif(str(message.getAttr('name')) == self._group):
 			children = message.getPayload()
 			for child in children:
 				if(child.getName() == "sync-begin"):
 					self._sync_total = child.getAttr('num-messages')
-					self._sync_data = ""
-					self.status == "syncing"
-				if(child.getName() == "sync-user"):
-					self.users[child.getAttr("id")] = InfUser(child.getAttr("id"), child.getAttr("name"), child.getAttr("status"), child.getAttr("time"), child.getAttr("caret"), child.getAttr("selection"), child.getAttr("hue"))
-				if(child.getName() == "sync-segment"):
-					self._sync_data += child.getPayload()[0]
-				if(child.getName() == "sync-end"):
-					self.text = self._sync_data
+					self._sync_buffer = infinote.Buffer()
+					self._sync_vector = infinote.Vector()
+					self._sync_log = []
+					self.status = "syncing"
+				elif(child.getName() == "sync-user"):
+					self.users[int(child.getAttr("id"))] = InfUser(int(child.getAttr("id")), str(child.getAttr("name")), str(child.getAttr("status")), str(child.getAttr("time")), int(child.getAttr("caret")), int(child.getAttr("selection")), float(child.getAttr("hue")))
+				elif(child.getName() == "sync-segment"):
+					segment_user = int(child.getAttr("author"))
+					segment_text = child.getPayload()[0]
+					self._sync_buffer.segments.append(infinote.Segment(segment_user, segment_text))
+				elif(child.getName() == "sync-request"):
+					if(self.status == "syncing"):
+						request_user = int(child.getAttr("user"))
+						request_time = infinote.Vector(str(child.getAttr("time")))
+						for request in child.getPayload():
+							if(request.getName() == "insert" or request.getName() == "insert-caret"):
+								request_position = int(request.getAttr("pos"))
+								request_text = request.getData()
+								self._sync_vector = self._sync_vector.overwrite(request_time)
+								self._sync_log.append(infinote.DoRequest(request_user, request_time, infinote.Insert(int(request_position), infinote.Buffer([infinote.Segment(request_user, request_text)]))))
+							if(request.getName() == "delete" or request.getName() == "delete-caret"):
+								request_position = int(request.getAttr("pos"))
+								request_length = int(request.getAttr("len")) if request.getAttr("len") else 1
+								self._sync_vector = self._sync_vector.overwrite(request_time)
+								self._sync_log.append(None)
+								#TODO: handle delete sync :(
+							if(request.getName() == "undo" or request.getName() == "undo-caret"):
+								self._sync_vector = self._sync_vector.overwrite(request_time)
+								self._sync_log.append(None)
+								#TODO: handle undo sync :(
+				elif(child.getName() == "sync-end"):
+					self._sync_vector = self._sync_vector.all_incr()
+					current_user.time = infinote.Vector(self._sync_vector)
+					self._state = infinote.State(self._sync_buffer, self._sync_vector, self._sync_log)
+					self._state.onexecute = self.add_to_log
+					self._sync_buffer = None
 					client.send('<group publisher="you" name="'+self._group+'"><sync-ack/></group>')
 					self._join_seq = get_seq()
 					self._join_suffix = 1
-					client.send('<group publisher="you" name="'+self._group+'"><user-join seq="'+str(self._join_seq)+'" name="'+current_user.name+'" status="active" time="" caret="0" hue="'+str(current_user.hue)+'"/></group>')
+					client.send('<group publisher="you" name="'+self._group+'"><user-join seq="'+str(self._join_seq)+'" name="'+current_user.name+'" status="active" time="'+current_user.time.toString()+'" caret="0" hue="'+str(current_user.hue)+'"/></group>')
 					self.state = "joining"
-				if(child.getName() == "request-failed"):
-					if self.state == "joining" and str(self._join_seq) in child.getAttr("seq"):
+				elif(child.getName() == "request-failed"):
+					if self.state == "joining" and str(self._join_seq) in str(child.getAttr("seq")):
 						if(child.getAttr("domain") == "INF_USER_ERROR"):
 							self._join_suffix += 1
-							client.send('<group publisher="you" name="'+self._group+'"><user-join seq="'+str(self._join_seq)+'" name="'+current_user.name+' '+str(self._join_suffix)+'" status="active" time="" caret="0" hue="0.71727399999999997"/></group>')
+							client.send('<group publisher="you" name="'+self._group+'"><user-join seq="'+str(self._join_seq)+'" name="'+current_user.name+' '+str(self._join_suffix)+'" status="active" time="'+current_user.time.toString()+'" caret="0" hue="0.71727399999999997"/></group>')
 						else:
 							debuggy.print_debug("error domain "+child.getAttr("domain")+" code "+child.getAttr("code")+": "+child.getData())
 							self.status = "error"
-				if(child.getName() == "user-join"):
-					self.users[child.getAttr("id")] = InfUser(child.getAttr("id"), child.getAttr("name"), child.getAttr("status"), child.getAttr("time"), child.getAttr("caret"), child.getAttr("selection"), child.getAttr("hue"))
+				elif(child.getName() == "user-join"):
+					self.users[int(child.getAttr("id"))] = InfUser(int(child.getAttr("id")), str(child.getAttr("name")), str(child.getAttr("status")), str(child.getAttr("time")), int(child.getAttr("caret")), int(child.getAttr("selection")), float(child.getAttr("hue")))
 					if self.state == "joining" and str(self._join_seq) in child.getAttr("seq"):
-						self.user_id = child.getAttr("id")
+						self.user_id = int(child.getAttr("id"))
 						self._initialize()
-				if(child.getName() == "user-rejoin"):
-					self.users[child.getAttr("id")] = InfUser(child.getAttr("id"), child.getAttr("name"), child.getAttr("status"), child.getAttr("time"), child.getAttr("caret"), child.getAttr("selection"), child.getAttr("hue"))
+				elif(child.getName() == "user-rejoin"):
+					self.users[int(child.getAttr("id"))] = InfUser(int(child.getAttr("id")), str(child.getAttr("name")), str(child.getAttr("status")), str(child.getAttr("time")), int(child.getAttr("caret")), int(child.getAttr("selection")), float(child.getAttr("hue")))
 					if self.state == "joining" and str(self._join_seq) in child.getAttr("seq"):
-						self.user_id = child.getAttr("id")
+						self.user_id = int(child.getAttr("id"))
 						self._initialize()
+				elif(child.getName() == "request"):
+					if(self.status == "loaded"):
+						request_user = int(child.getAttr("user"))
+						user = self.users[request_user]
+						user.time = user.time.add(infinote.Vector(str(child.getAttr("time"))))
+						request_time = user.time.toString()
+						for request in child.getPayload():
+							if(request.getName() == "move"):
+								self.users[request_user].caret = int(request.getAttr("caret"))
+								self.users[request_user].sel = int(request.getAttr("selection"))
+							if(request.getName() == "insert" or request.getName() == "insert-caret"):
+								user.time = user.time.incr(request_user)
+								current_user.time = current_user.time.incr(request_user)
+								request_position = int(request.getAttr("pos"))
+								request_text = request.getData()
+								self.try_insert([request_user, request_time, request_position, request_text])
+								if(request.getName() == "insert-caret"):
+									self.users[request_user].caret = request_position
+									self.users[request_user].sel = 0
+							if(request.getName() == "delete" or request.getName() == "delete-caret"):
+								user.time = user.time.incr(request_user)
+								current_user.time = current_user.time.incr(request_user)
+								request_position = int(request.getAttr("pos"))
+								request_length = int(request.getAttr("len")) if request.getAttr("len") else 1
+								self.try_delete([request_user, request_time, request_position, request_length])
+								if(request.getName() == "delete-caret"):
+									self.users[request_user].caret = request_position
+									self.users[request_user].sel = 0
+							if(request.getName() == "undo" or request.getName() == "undo-caret"):
+								user.time = user.time.incr(request_user)
+								current_user.time = current_user.time.incr(request_user)
+								self.try_undo([request_user, request_time])
+								# if(request.getName() == "undo-caret"):
+								# 	self.users[request_user].caret = request_position
+								# 	self.users[request_user].sel = 0
+
 
 	def __str__(self):
 		return "<InfTextEditor id="+str(self.id)+" name="+str(self.name)+">"
@@ -207,17 +315,20 @@ def get_seq():
 	return seq
 
 
-def sublime_display(x):
+def sublime_display(text):
 	global my_view
 	edit = my_view.begin_edit()
-	my_view.insert(edit, 0, x.replace("\r", "\n"))
+	my_view.replace(edit, sublime.Region(0, my_view.size()), text.replace("\r", "\n"))
 	my_view.end_edit(edit)
-	#sys.stdout.write("["+", ".join(str(e) for e in x)+"]")
 
-def display(x):
-	sublime.set_timeout(lambda: sublime_display(x), 0)
-	#print(x)
-	client.disconnect()
+def sublime_sync(editor):
+	sublime.set_timeout(lambda: sublime_display(editor.get_text()), 0)
+
+def display(text):
+	sublime.set_timeout(lambda: sublime_display(text), 0)
+
+
+
 
 def start_directory():
 	global directory
@@ -228,7 +339,10 @@ def open_directory(directory):
 	directory.get_directory(lambda x: display(x))
 
 def open_file():
-	client.register(InfTextEditor(InfDirectoryNode(2, 0, "cool", "InfText"), lambda x: display(x.text)))
+	client.register(InfTextEditor(InfDirectoryNode(2, 0, "cool", "InfText"), lambda x: sublime_sync(x)))
+
+
+
 
 def start_client():
 	global client
@@ -255,3 +369,11 @@ class ConnectToInfinoteServerCommand(sublime_plugin.ApplicationCommand):
 		my_view = sublime.active_window().new_file()
 		my_view.set_scratch(True)
 		start_client()
+
+class DisconnectFromInfinoteServerCommand(sublime_plugin.ApplicationCommand):
+	def run(self):
+		if client and client.is_connected():
+			client.disconnect()
+			print("disconnected")
+		else:
+			print("already disconnected")

@@ -1,3 +1,4 @@
 [
-    { "keys": ["ctrl+alt+c"],  "command": "connect_to_infinote_server" }
+    { "keys": ["ctrl+alt+c"],  "command": "connect_to_infinote_server" },
+    { "keys": ["ctrl+alt+d"],  "command": "disconnect_from_infinote_server" }
 ]

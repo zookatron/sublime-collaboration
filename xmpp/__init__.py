@@ -53,7 +53,7 @@ class GroupProtocol(Protocol):
 
 class XMPPHandler(CommonClient):
 	def __init__(self,server='',port=5347,typ=None,debug=[],domains=None,sasl=0,bind=0,route=0):
-		if(False):
+		if(True):
 			debug=['always', 'nodebuilder']
 		self.Namespace,self.DBG='jabber:client',DBG_CLIENT
 		CommonClient.__init__(self,server,port=port,debug=debug)

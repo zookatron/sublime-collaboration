@@ -903,7 +903,13 @@ class Vector(object):
         '''
         result = Vector(self)
         def Func(uid, op, index):
-            result.users[index]= {'id':uid,'op':result.get(uid) + op}
+            found = False
+            for index, _user in enumerate(result.users):
+                if _user['id'] == uid: 
+                    found = True
+                    result.users[index]['op'] = result.get(uid)+op
+            if not found:
+                result.users.append({'id':uid,'op':op})
         other.eachUser(Func)
         return result
 
@@ -911,6 +917,20 @@ class Vector(object):
         '''Returns a copy of this vector.'''
         return Vector(self)
 
+    def overwrite(self, other):
+        '''Returns the sum of two vectors.
+        @param {Vector} other
+        '''
+        result = Vector(self)
+        for oindex, o_user in enumerate(other.users):
+            found = False
+            for index, _user in enumerate(result.users):
+                if _user['id'] == o_user['id']: 
+                    found = True
+                    result.users[index]['op'] = o_user['op']
+            if not found:
+                result.users.append(o_user)            
+        return result
 
     def get(self, user):
         '''Returns a specific component of this vector, or 0 if it is not defined.
@@ -970,9 +990,21 @@ class Vector(object):
                 found = True
                 result.users[index]['op'] = result.get(user) + by
         if not found:
-            result.users.append({'id':user,'op':result.get(user) + by})            
+            result.users.append({'id':user,'op':result.get(user) + by})    
         return result
         
+    def all_incr(self, by = 1):
+        '''Returns a new vector with a specific component increased by a given
+        amount.
+        @param {Number} user Component to increase
+        @param {Number} [by] Amount by which to increase the component (default 1)
+        @type Vector
+        '''
+        result = Vector(self)
+        found = False
+        for index, _user in enumerate(result.users):
+            result.users[index]['op'] = result.get(_user['id']) + by
+        return result
 
     @classmethod
     def leastCommonSuccessor(self, v1, v2):
@@ -1001,14 +1033,14 @@ class State(object):
     @param {Buffer} [buffer] Pre-initialize the buffer
     @param {Vector} [vector] Set the initial state vector
     '''
-    def __init__(self, buffer = None, vector = None):
+    def __init__(self, buffer = None, vector = None, log = None):
         if isinstance(buffer, Buffer):
             self.buffer = buffer.copy()
         else:
             self.buffer = Buffer() 
         self.vector = Vector(vector)
         self.request_queue = []
-        self.log = []
+        self.log = log if log else []
         self.cache = {}
         
         
@@ -1083,9 +1115,9 @@ class State(object):
                 foldBy = targetVector.get(_user['id']) - lastRequest.associatedRequest(self.log).vector.get(_user['id'])            
                 if(targetVector.get(_user['id']) >= foldBy):
                     foldAt = targetVector.incr(_user['id'], -foldBy)                
+                    if self.reachable(foldAt) and request.vector.causallyBefore(foldAt):
                     #We need to make sure that the state we're trying to fold at is reachable and that the request 
                     #we're translating was issued before it.                
-                    if self.reachable(foldAt) and request.vector.causallyBefore(foldAt):
                         translated = self.translate(request, foldAt)
                         folded = translated.fold(_user['id'], foldBy)                    
                         return folded
@@ -1171,12 +1203,13 @@ class State(object):
             for index, value in enumerate(self.request_queue):
                 request = self.request_queue[index]
                 if self.canExecute(request):
-                    self.request_queue.splice(index, 1)
+                    self.request_queue.pop(index)
                     break
         if not self.canExecute(request):
             #Not executable yet - put it (back) in the queue.
             if request != None:
-                self.queue(request)        
+                self.queue(request) 
+            print("cantExecute")
             return
         
         request = request.copy()
@@ -1205,7 +1238,7 @@ class State(object):
         translated.execute(self)
     
         try:
-            getattr(self, 'onexecute')  
+            getattr(self, 'onexecute')
             self.onexecute(translated)
         except AttributeError:
             pass
